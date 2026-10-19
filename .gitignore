@@ -1,0 +1,10 @@
+.DS_Store
+.source-cache/
+build/
+dist/*
+!dist/.gitkeep
+*.dmg
+*.zip
+*.tar.gz
+!BundledTools/*.tar.gz
+

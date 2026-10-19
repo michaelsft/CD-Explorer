@@ -1,0 +1,32 @@
+FFmpeg notice for CD Explorer
+=============================
+
+This application bundles FFmpeg and FFprobe 9.0.2, obtained from the official
+FFmpeg source distribution at https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+
+Source archive SHA-256:
+8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+
+The binaries are built separately for arm64 and x86_64 and combined as
+universal Mach-O executables. They include the GPL-licensed x264 encoder so
+high-quality software H.264 conversion remains available even when macOS's
+VideoToolbox encoder is unavailable.
+
+x264 source revision 0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee:
+https://code.videolan.org/videolan/x264/-/archive/0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee/x264-0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee.tar.gz
+Source archive SHA-256:
+d0967a1348c85dfde363bb52610403be898171493100561efa0dd05d5fd1ae50
+
+Notable configure options:
+  --disable-shared --enable-static --disable-doc --disable-debug
+  --disable-ffplay --disable-network --disable-autodetect
+  --enable-zlib --enable-videotoolbox --enable-audiotoolbox
+  --enable-gpl --enable-libx264
+  --enable-ffmpeg --enable-ffprobe
+
+Because x264 support is enabled, these FFmpeg binaries are distributed under
+the GNU General Public License, version 2 or later. A copy of version 2
+accompanies these binaries. The corresponding unmodified sources are
+available from the URLs above.
+
+FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.
