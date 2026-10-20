@@ -2095,6 +2095,11 @@ enum VideoCompatibility {
         } else if aspectCorrection == .squeezeTo4x3 {
             filters.append("setdar=4/3")
         }
+        if forceRec709 {
+            // Metadata only: replace the final frame properties inherited by
+            // libx264 without performing any colour-space or pixel conversion.
+            filters.append("setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709")
+        }
         var arguments = ["-y", "-hide_banner", "-loglevel", "error", "-i", source.path,
                          "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "0",
                          "-vf", filters.joined(separator: ",")]
