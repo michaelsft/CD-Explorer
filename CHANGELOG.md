@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## 3.1 - 2026-10-20
 
-- Added optional Rec.709 H.264 VUI and MP4 container metadata replacement for converted videos intended for YouTube.
+- Added optional, metadata-only Rec.709 primaries, transfer, matrix and limited-range replacement in both H.264 VUI and MP4 container metadata for converted videos intended for YouTube.
 - Added lossless H.264 video stream copying when Rec.709 tagging is the only requested video change.
+- Enlarged the embedded-border adjustment preview, anchored its controls at the bottom and reduced the crop-outline thickness.
 
 ## 3.0 - 2026-10-19
 

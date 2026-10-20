@@ -13,8 +13,8 @@
 1. Update `CFBundleShortVersionString` in `Info.plist` and update `CHANGELOG.md`.
 2. Confirm `ThirdParty/DEPENDENCIES.md` matches the bundled binaries.
 3. Commit and tag the exact release source, for example `v3.0`.
-4. Run `bash Scripts/build_release.sh 3.0`.
-5. Run `bash Scripts/verify_release.sh 3.0`.
+4. Run `zsh Scripts/build_release.sh X.Y`.
+5. Run `zsh Scripts/verify_release.sh X.Y`.
 
 ## GitHub Release assets
 
