@@ -816,8 +816,8 @@ private final class CropOverlayView: NSView {
         mask.fill()
 
         NSColor.systemYellow.setStroke()
-        let outline = NSBezierPath(rect: retainedRect.insetBy(dx: 0.5, dy: 0.5))
-        outline.lineWidth = 1.5
+        let outline = NSBezierPath(rect: retainedRect.insetBy(dx: 0.375, dy: 0.375))
+        outline.lineWidth = 0.75
         outline.stroke()
     }
 }
@@ -1740,7 +1740,7 @@ enum VideoCompatibility {
             root.leadingAnchor.constraint(equalTo: panel.contentView!.leadingAnchor, constant: 20),
             root.trailingAnchor.constraint(equalTo: panel.contentView!.trailingAnchor, constant: -20),
             root.topAnchor.constraint(equalTo: panel.contentView!.topAnchor, constant: 18),
-            root.bottomAnchor.constraint(lessThanOrEqualTo: panel.contentView!.bottomAnchor, constant: -18)
+            root.bottomAnchor.constraint(equalTo: panel.contentView!.bottomAnchor, constant: -18)
         ])
         root.addArrangedSubview(NSTextField(wrappingLabelWithString:
             "Set the pixels to remove from each edge. Shaded areas will be removed; use the arrows below the image to check the crop throughout the video."))
@@ -1750,7 +1750,9 @@ enum VideoCompatibility {
         controller.previewView.layer?.borderWidth = 1
         controller.previewView.layer?.cornerRadius = 5
         controller.previewView.widthAnchor.constraint(equalToConstant: 900).isActive = true
-        controller.previewView.heightAnchor.constraint(equalToConstant: 440).isActive = true
+        controller.previewView.heightAnchor.constraint(greaterThanOrEqualToConstant: 500).isActive = true
+        controller.previewView.setContentHuggingPriority(.defaultLow, for: .vertical)
+        controller.previewView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         root.addArrangedSubview(controller.previewView)
 
         let frameNavigation = NSStackView(views: [controller.previousFrame, controller.frameLabel, controller.nextFrame])
