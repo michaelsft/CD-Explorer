@@ -32,6 +32,7 @@ Commercial Enhanced CDs often contain music, videos, artwork and interactive fil
 - Converts video to H.264/AAC at original size, PAL/NTSC DVD size, 720p or 1080p.
 - Offers frame-accurate In/Out points, embedded-border removal and picture adjustment.
 - Supports aspect-ratio correction, optional 16:9 framing and proportional Lanczos scaling.
+- Optionally replaces incorrect video colour metadata with Rec.709 limited-range tags for YouTube without applying a pixel-level colour conversion.
 - Detects interlacing and offers BWDIF deinterlacing with the detected field order.
 - Offers motion-compensated frame-rate conversion for low or unusual frame rates.
 - Includes FFmpeg and FFprobe for both Apple silicon and Intel Macs.

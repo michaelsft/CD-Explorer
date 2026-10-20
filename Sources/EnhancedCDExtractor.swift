@@ -681,6 +681,7 @@ struct VideoExtractionRequest {
     let saveOriginal: Bool
     let outputSizes: [VideoOutputSize]
     let aspectCorrection: VideoAspectCorrection?
+    let forceRec709: Bool
     let fitToWidescreen: Bool
     let crop: VideoCrop?
     let colorSettings: VideoColorSettings?
@@ -1558,6 +1559,11 @@ enum VideoCompatibility {
             root.addArrangedSubview(stretch)
             root.addArrangedSubview(squeeze)
 
+            let forceRec709 = NSButton(checkboxWithTitle: "Force Rec.709 tags for YouTube", target: nil, action: nil)
+            forceRec709.state = .off
+            forceRec709.toolTip = "Replaces colour metadata with Rec.709 limited-range tags without applying a gamma, brightness or pixel-level colour conversion."
+            root.addArrangedSubview(forceRec709)
+
             let widescreen = NSButton(checkboxWithTitle: "Place converted video in a 16:9 frame", target: nil, action: nil)
             widescreen.state = .off
             widescreen.toolTip = "Adds black letterbox or pillarbox borders without stretching the picture. Leave this off to retain the video's natural frame shape."
@@ -1681,6 +1687,7 @@ enum VideoCompatibility {
                 else { aspectCorrection = nil }
                 return VideoExtractionRequest(saveOriginal: saveOriginal, outputSizes: outputs,
                                                aspectCorrection: aspectCorrection,
+                                               forceRec709: forceRec709.state == .on,
                                                fitToWidescreen: widescreen.state == .on,
                                                crop: cropToggle.state == .on ? chosenCrop : nil,
                                                colorSettings: blacks.state == .on ? chosenColor : nil,
@@ -1979,6 +1986,7 @@ enum VideoCompatibility {
     static func convertToH264(source: URL, destination: URL, probe: VideoProbe,
                               outputSize: VideoOutputSize = .source,
                               aspectCorrection: VideoAspectCorrection? = nil,
+                              forceRec709: Bool = false,
                               fitToWidescreen: Bool = false,
                               crop: VideoCrop? = nil, colorSettings: VideoColorSettings? = nil,
                               targetFrameRate: String? = nil,
@@ -1987,6 +1995,27 @@ enum VideoCompatibility {
                               progress: @escaping (Double) -> Void = { _ in }) throws {
         guard let ffmpeg = BundledMediaTools.ffmpegExecutable else {
             throw ExtractorError.commandFailed("FFmpeg is required to convert older video codecs to H.264.")
+        }
+        let canCopyH264Video = forceRec709 && probe.videoCodec == "h264" && outputSize == .source
+            && aspectCorrection == nil && !fitToWidescreen && crop == nil && colorSettings == nil
+            && targetFrameRate == nil && deinterlace == nil && clipRange == nil
+        if canCopyH264Video {
+            let metadataFilter = "h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1:video_full_range_flag=0"
+            let arguments = ["-y", "-hide_banner", "-loglevel", "error", "-i", source.path,
+                             "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "0",
+                             "-c:v", "copy", "-bsf:v", metadataFilter,
+                             "-c:a", "aac", "-b:a", "256k",
+                             "-color_primaries:v", "bt709", "-color_trc:v", "bt709",
+                             "-colorspace:v", "bt709", "-color_range:v", "tv",
+                             "-movflags", "+faststart+write_colr",
+                             "-progress", "pipe:1", "-nostats", destination.path]
+            _ = try CommandRunner.runWithProgress(ffmpeg, arguments,
+                duration: probe.duration, timeout: max(300, probe.duration * 2 + 120), progress: progress)
+            let converted = try inspect(destination)
+            guard converted.videoCodec == "h264" else {
+                throw ExtractorError.commandFailed("The Rec.709-tagged video could not be validated as H.264.")
+            }
+            return
         }
         var filters: [String] = []
         if let clipRange { filters.append(clipRange.videoFilter) }
@@ -2071,8 +2100,15 @@ enum VideoCompatibility {
                          "-vf", filters.joined(separator: ",")]
         if let clipRange { arguments += ["-af", clipRange.audioFilter] }
         if deinterlace != nil { arguments += ["-field_order", "progressive"] }
-        arguments += ["-c:v", "libx264", "-preset", "slow", "-crf", "16", "-profile:v", "high", "-pix_fmt", "yuv420p",
-                      "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart",
+        arguments += ["-c:v", "libx264", "-preset", "slow", "-crf", "16", "-profile:v", "high", "-pix_fmt", "yuv420p"]
+        if forceRec709 {
+            // Encoder colour options write the H.264 VUI values; write_colr
+            // ensures the same values are also present in the MP4 container.
+            arguments += ["-color_primaries:v", "bt709", "-color_trc:v", "bt709",
+                          "-colorspace:v", "bt709", "-color_range:v", "tv"]
+        }
+        arguments += ["-c:a", "aac", "-b:a", "256k",
+                      "-movflags", forceRec709 ? "+faststart+write_colr" : "+faststart",
                       "-progress", "pipe:1", "-nostats", destination.path]
         let outputDuration = clipRange?.duration ?? probe.duration
         _ = try CommandRunner.runWithProgress(ffmpeg, arguments,
@@ -3296,6 +3332,7 @@ final class AppModel: ObservableObject {
                     try VideoCompatibility.convertToH264(source: source, destination: output,
                         probe: probe, outputSize: outputSize,
                         aspectCorrection: request.aspectCorrection,
+                        forceRec709: request.forceRec709,
                         fitToWidescreen: request.fitToWidescreen,
                         crop: request.crop, colorSettings: request.colorSettings,
                         targetFrameRate: request.targetFrameRate,
@@ -3510,6 +3547,7 @@ final class AppModel: ObservableObject {
                                         try VideoCompatibility.convertToH264(source: temporary, destination: mp4Target,
                                                                            probe: probe, outputSize: outputSize,
                                                                            aspectCorrection: request.aspectCorrection,
+                                                                           forceRec709: request.forceRec709,
                                                                            fitToWidescreen: request.fitToWidescreen,
                                                                            crop: request.crop,
                                                                            colorSettings: request.colorSettings,

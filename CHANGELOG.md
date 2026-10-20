@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added optional Rec.709 H.264 VUI and MP4 container metadata replacement for converted videos intended for YouTube.
+- Added lossless H.264 video stream copying when Rec.709 tagging is the only requested video change.
+
 ## 3.0 - 2026-10-19
 
 - Added secure audio extraction with WAV, AIFF, FLAC, MP3 and AAC output.
