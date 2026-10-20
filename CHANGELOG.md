@@ -2,7 +2,6 @@
 
 ## Unreleased
 
-- Added genuine source-aware Rec.709 limited-range pixel conversion to every re-encoded video before resizing or upscaling.
 - Added optional Rec.709 H.264 VUI and MP4 container metadata replacement for converted videos intended for YouTube.
 - Added lossless H.264 video stream copying when Rec.709 tagging is the only requested video change.
 
