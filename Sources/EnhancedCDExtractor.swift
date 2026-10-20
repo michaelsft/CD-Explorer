@@ -542,6 +542,10 @@ struct VideoProbe {
     let height: Int
     let frameRate: Double
     let sourceSAR: Double
+    let colorSpace: String?
+    let colorTransfer: String?
+    let colorPrimaries: String?
+    let colorRange: String?
     let detectedCrop: VideoCrop?
     let detectedBlackFloor: Int?
     let interlaceAnalysis: VideoInterlaceAnalysis?
@@ -1307,6 +1311,10 @@ enum VideoCompatibility {
             let height: Int?
             let avg_frame_rate: String?
             let sample_aspect_ratio: String?
+            let color_space: String?
+            let color_transfer: String?
+            let color_primaries: String?
+            let color_range: String?
         }
         struct Format: Decodable { let duration: String? }
         let streams: [Stream]
@@ -1319,7 +1327,7 @@ enum VideoCompatibility {
         }
         let output = try CommandRunner.run(ffprobe,
             ["-v", "error", "-print_format", "json", "-show_entries",
-             "format=duration:stream=codec_type,codec_name,codec_long_name,width,height,avg_frame_rate,sample_aspect_ratio", file.path], timeout: 120)
+             "format=duration:stream=codec_type,codec_name,codec_long_name,width,height,avg_frame_rate,sample_aspect_ratio,color_space,color_transfer,color_primaries,color_range", file.path], timeout: 120)
         guard let data = output.data(using: .utf8) else {
             throw ExtractorError.commandFailed("FFprobe returned unreadable codec information.")
         }
@@ -1342,6 +1350,10 @@ enum VideoCompatibility {
                           height: video.height ?? 0,
                           frameRate: frameRate,
                           sourceSAR: sourceSAR,
+                          colorSpace: video.color_space,
+                          colorTransfer: video.color_transfer,
+                          colorPrimaries: video.color_primaries,
+                          colorRange: video.color_range,
                           detectedCrop: nil,
                           detectedBlackFloor: nil,
                           interlaceAnalysis: nil)
@@ -1427,6 +1439,8 @@ enum VideoCompatibility {
                           audioCodec: probe.audioCodec, audioDescription: probe.audioDescription,
                           duration: probe.duration, width: probe.width, height: probe.height,
                           frameRate: probe.frameRate, sourceSAR: probe.sourceSAR,
+                          colorSpace: probe.colorSpace, colorTransfer: probe.colorTransfer,
+                          colorPrimaries: probe.colorPrimaries, colorRange: probe.colorRange,
                           detectedCrop: detectedCrop, detectedBlackFloor: blackFloor,
                           interlaceAnalysis: interlaceAnalysis)
     }
@@ -1561,7 +1575,7 @@ enum VideoCompatibility {
 
             let forceRec709 = NSButton(checkboxWithTitle: "Force Rec.709 tags for YouTube", target: nil, action: nil)
             forceRec709.state = .off
-            forceRec709.toolTip = "Replaces colour metadata with Rec.709 limited-range tags without applying a gamma, brightness or pixel-level colour conversion."
+            forceRec709.toolTip = "Re-encoded copies are converted to Rec.709 automatically. For an otherwise unchanged H.264 source, this option replaces only the colour metadata without re-encoding its video."
             root.addArrangedSubview(forceRec709)
 
             let widescreen = NSButton(checkboxWithTitle: "Place converted video in a 16:9 frame", target: nil, action: nil)
@@ -1983,6 +1997,27 @@ enum VideoCompatibility {
         return filters
     }
 
+    private static func rec709ConversionFilter(for probe: VideoProbe) -> String {
+        // Prefer the stream's declared colour properties. Older or untagged SD
+        // sources are inferred from their television standard; HD defaults to
+        // BT.709. The filter transforms sample values, not merely their tags.
+        let fallback = (probe.height > 576 || probe.width > 1024)
+            ? "bt709" : (probe.usesPALFrameRate ? "bt470bg" : "smpte170m")
+        let spaces: Set<String> = ["bt709", "fcc", "bt470bg", "smpte170m", "smpte240m",
+                                   "ycgco", "gbr", "bt2020nc", "bt2020ncl"]
+        let primaries: Set<String> = ["bt709", "bt470m", "bt470bg", "smpte170m", "smpte240m",
+                                      "smpte428", "film", "smpte431", "smpte432", "bt2020",
+                                      "jedec-p22", "ebu3213"]
+        let transfers: Set<String> = ["bt709", "bt470m", "gamma22", "bt470bg", "gamma28",
+                                      "smpte170m", "smpte240m", "linear", "srgb", "iec61966-2-1",
+                                      "xvycc", "iec61966-2-4", "bt2020-10", "bt2020-12"]
+        let inputSpace = probe.colorSpace.flatMap { spaces.contains($0) ? $0 : nil } ?? fallback
+        let inputPrimaries = probe.colorPrimaries.flatMap { primaries.contains($0) ? $0 : nil } ?? fallback
+        let inputTransfer = probe.colorTransfer.flatMap { transfers.contains($0) ? $0 : nil } ?? fallback
+        let inputRange = ["pc", "jpeg"].contains(probe.colorRange ?? "") ? "pc" : "tv"
+        return "colorspace=ispace=\(inputSpace):iprimaries=\(inputPrimaries):itrc=\(inputTransfer):irange=\(inputRange):space=bt709:primaries=bt709:trc=bt709:range=tv:format=yuv420p"
+    }
+
     static func convertToH264(source: URL, destination: URL, probe: VideoProbe,
                               outputSize: VideoOutputSize = .source,
                               aspectCorrection: VideoAspectCorrection? = nil,
@@ -2025,6 +2060,10 @@ enum VideoCompatibility {
         if let targetFrameRate {
             filters.append("minterpolate=fps=\(targetFrameRate):mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1")
         }
+        // Convert at source resolution before any aspect correction, resize or
+        // upscale. This preserves the intended appearance while producing real
+        // Rec.709 limited-range samples for every re-encoded copy.
+        filters.append(rec709ConversionFilter(for: probe))
         switch aspectCorrection {
         case .stretchTo16x9:
             // Deliberately reshape the active picture rather than preserving
@@ -2101,14 +2140,11 @@ enum VideoCompatibility {
         if let clipRange { arguments += ["-af", clipRange.audioFilter] }
         if deinterlace != nil { arguments += ["-field_order", "progressive"] }
         arguments += ["-c:v", "libx264", "-preset", "slow", "-crf", "16", "-profile:v", "high", "-pix_fmt", "yuv420p"]
-        if forceRec709 {
-            // Encoder colour options write the H.264 VUI values; write_colr
-            // ensures the same values are also present in the MP4 container.
-            arguments += ["-color_primaries:v", "bt709", "-color_trc:v", "bt709",
-                          "-colorspace:v", "bt709", "-color_range:v", "tv"]
-        }
+        // Match the H.264 VUI and MP4 container metadata to the Rec.709 pixels.
+        arguments += ["-color_primaries:v", "bt709", "-color_trc:v", "bt709",
+                      "-colorspace:v", "bt709", "-color_range:v", "tv"]
         arguments += ["-c:a", "aac", "-b:a", "256k",
-                      "-movflags", forceRec709 ? "+faststart+write_colr" : "+faststart",
+                      "-movflags", "+faststart+write_colr",
                       "-progress", "pipe:1", "-nostats", destination.path]
         let outputDuration = clipRange?.duration ?? probe.duration
         _ = try CommandRunner.runWithProgress(ffmpeg, arguments,
