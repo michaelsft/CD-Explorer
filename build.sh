@@ -20,12 +20,14 @@ for tool in ffmpeg ffprobe; do
   fi
 done
 
-for spec in '16 16x16' '32 16x16@2x' '32 32x32' '64 32x32@2x' '128 128x128' '256 128x128@2x' '256 256x256' '512 256x256@2x' '512 512x512' '1024 512x512@2x'; do
-  pixels=${spec%% *}
-  name=${spec#* }
-  /opt/homebrew/bin/magick -background none "$project_dir/AppIcon.png" -resize "${pixels}x${pixels}" -depth 8 \
-    -type TrueColorAlpha -define png:color-type=6 "$iconset/icon_${name}.png"
-done
+if [[ ! -f "$iconset/icon_512x512@2x.png" || "$project_dir/AppIcon.png" -nt "$iconset/icon_512x512@2x.png" ]]; then
+  for spec in '16 16x16' '32 16x16@2x' '32 32x32' '64 32x32@2x' '128 128x128' '256 128x128@2x' '256 256x256' '512 256x256@2x' '512 512x512' '1024 512x512@2x'; do
+    pixels=${spec%% *}
+    name=${spec#* }
+    /opt/homebrew/bin/magick -background none "$project_dir/AppIcon.png" -resize "${pixels}x${pixels}" -depth 8 \
+      -type TrueColorAlpha -define png:color-type=6 "$iconset/icon_${name}.png"
+  done
+fi
 /usr/bin/xcrun actool --compile "$contents/Resources" --platform macosx \
   --minimum-deployment-target 13.0 --app-icon AppIcon \
   --output-partial-info-plist "$build_dir/asset-info.plist" "$project_dir/Assets.xcassets"

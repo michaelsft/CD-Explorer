@@ -1158,13 +1158,56 @@ private final class ClipTimelineView: NSControl {
     }
 }
 
+private final class ClipPlaybackView: NSView {
+    private let playerLayer = AVPlayerLayer()
+    private let stillImage = NSImageView()
+
+    var player: AVPlayer? {
+        didSet { playerLayer.player = player }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+        playerLayer.videoGravity = .resizeAspect
+        layer?.addSublayer(playerLayer)
+        stillImage.imageScaling = .scaleProportionallyUpOrDown
+        stillImage.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stillImage)
+        NSLayoutConstraint.activate([
+            stillImage.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stillImage.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stillImage.topAnchor.constraint(equalTo: topAnchor),
+            stillImage.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        playerLayer.frame = bounds
+    }
+
+    func showStill(_ image: NSImage?) {
+        stillImage.image = image
+        stillImage.isHidden = false
+    }
+
+    func showPlayer() {
+        stillImage.isHidden = true
+    }
+}
+
 private final class ClipEditorController: NSObject, NSTextFieldDelegate {
     let source: URL
     let probe: VideoProbe
-    let preview = NSImageView()
+    let preview = ClipPlaybackView()
     let timeline: ClipTimelineView
     let frameField = NSTextField()
     let frameStepper = NSStepper()
+    let playPause = NSButton(title: "▶", target: nil, action: nil)
     let previous = NSButton(title: "◀", target: nil, action: nil)
     let next = NSButton(title: "▶", target: nil, action: nil)
     let frameLabel = NSTextField(labelWithString: "")
@@ -1176,6 +1219,10 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
     private(set) var outFrame: Int
     private var currentFrameIndex: Int
     private var generation = 0
+    private let player: AVPlayer
+    private var timeObserver: Any?
+    private var endObserver: NSObjectProtocol?
+    private var isPlaying = false
 
     init(source: URL, probe: VideoProbe, initial: VideoClipRange?) {
         self.source = source
@@ -1186,9 +1233,15 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         self.outFrame = max(self.inFrame, min((initial.map { $0.endFrameExclusive - 1 } ?? totalFrames - 1), totalFrames - 1))
         self.currentFrameIndex = self.inFrame
         self.timeline = ClipTimelineView(totalFrames: totalFrames)
+        self.player = AVPlayer(url: source)
         super.init()
+        preview.player = player
         timeline.currentFrame = currentFrameIndex; timeline.inFrame = inFrame; timeline.outFrame = outFrame
-        timeline.onFrameChange = { [weak self] frame, final in self?.setCurrent(frame, loadImage: final) }
+        timeline.onFrameChange = { [weak self] frame, final in
+            guard let self else { return }
+            if final { self.pausePlayback() }
+            self.setCurrent(frame, loadImage: final)
+        }
         frameField.stringValue = String(inFrame + 1)
         frameField.alignment = .right
         frameField.delegate = self
@@ -1196,10 +1249,21 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         frameStepper.integerValue = inFrame + 1; frameStepper.target = self; frameStepper.action = #selector(stepperChanged)
         previous.target = self; previous.action = #selector(previousFrame)
         next.target = self; next.action = #selector(nextFrame)
-        preview.imageScaling = .scaleProportionallyUpOrDown
-        preview.imageFrameStyle = .grayBezel
+        playPause.target = self; playPause.action = #selector(togglePlayback)
+        playPause.toolTip = "Play or pause"
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1.0 / 30.0,
+                                                                          preferredTimescale: 600),
+                                                       queue: .main) { [weak self] time in
+            self?.playbackAdvanced(to: time)
+        }
+        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
+                                                              object: player.currentItem, queue: .main) { [weak self] _ in
+            self?.playbackEnded()
+        }
         updateLabels()
     }
+
+    deinit { stopPlayback() }
 
     var currentFrame: Int { currentFrameIndex }
     var clipRange: VideoClipRange? {
@@ -1208,9 +1272,22 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
                               sourceFrameRate: max(0.001, probe.frameRate))
     }
 
-    @objc private func stepperChanged() { setCurrent(frameStepper.integerValue - 1) }
-    @objc private func previousFrame() { setCurrent(currentFrame - 1) }
-    @objc private func nextFrame() { setCurrent(currentFrame + 1) }
+    @objc private func stepperChanged() { pausePlayback(); setCurrent(frameStepper.integerValue - 1) }
+    @objc private func previousFrame() { pausePlayback(); setCurrent(currentFrame - 1) }
+    @objc private func nextFrame() { pausePlayback(); setCurrent(currentFrame + 1) }
+    @objc func jumpToInPoint() { pausePlayback(); setCurrent(inFrame) }
+    @objc func jumpToOutPoint() { pausePlayback(); setCurrent(outFrame) }
+    @objc private func togglePlayback() {
+        if isPlaying {
+            pausePlayback()
+        } else {
+            seekPlayer(to: currentFrame)
+            preview.showPlayer()
+            player.play()
+            isPlaying = true
+            playPause.title = "❚❚"
+        }
+    }
     @objc func setInPoint() {
         commitFrameField()
         inFrame = min(currentFrame, outFrame)
@@ -1222,6 +1299,7 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         updateLabels()
     }
     @objc func resetRange() {
+        pausePlayback()
         inFrame = 0; outFrame = totalFrames - 1
         setCurrent(0)
     }
@@ -1242,7 +1320,46 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         frameStepper.integerValue = value + 1
         timeline.currentFrame = value
         updateLabels()
-        if loadImage { loadPreview() }
+        if loadImage {
+            seekPlayer(to: value)
+            loadPreview()
+        }
+    }
+
+    private func seekPlayer(to frame: Int) {
+        let time = CMTime(seconds: Double(frame) / max(0.001, probe.frameRate), preferredTimescale: 60_000)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func playbackAdvanced(to time: CMTime) {
+        guard isPlaying, time.isNumeric else { return }
+        let frame = min(totalFrames - 1, max(0, Int((time.seconds * probe.frameRate).rounded(.down))))
+        setCurrent(frame, loadImage: false)
+    }
+
+    private func playbackEnded() {
+        isPlaying = false
+        playPause.title = "▶"
+        setCurrent(totalFrames - 1, loadImage: false)
+    }
+
+    func pausePlayback() {
+        guard isPlaying else { return }
+        player.pause()
+        isPlaying = false
+        playPause.title = "▶"
+    }
+
+    func stopPlayback() {
+        player.pause()
+        if let timeObserver {
+            player.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        }
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            self.endObserver = nil
+        }
     }
 
     private func timestamp(_ frame: Int) -> String {
@@ -1271,7 +1388,7 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
             let image = VideoCompatibility.previewFrame(source: self.source, frame: frame)
             DispatchQueue.main.async {
                 guard requestedGeneration == self.generation else { return }
-                self.preview.image = image
+                self.preview.showStill(image)
                 self.status.stringValue = image == nil ? "This frame could not be previewed." : ""
             }
         }
@@ -1287,6 +1404,7 @@ private final class ClipEditorSheetHandler: NSObject {
     @objc func apply() { finish(true) }
     @objc func cancel() { finish(false) }
     private func finish(_ applied: Bool) {
+        controller.stopPlayback()
         parent.removeChildWindow(panel); panel.orderOut(nil)
         let callback = completion; completion = nil
         callback?(applied, controller.clipRange)
@@ -1901,16 +2019,23 @@ enum VideoCompatibility {
         root.addArrangedSubview(controller.timeline)
 
         controller.frameField.widthAnchor.constraint(equalToConstant: 72).isActive = true
-        let navigation = NSStackView(views: [controller.previous,
+        let navigation = NSStackView(views: [controller.playPause, controller.previous,
             NSTextField(labelWithString: "Frame"), controller.frameField, controller.frameStepper,
             controller.next, controller.frameLabel])
         navigation.orientation = .horizontal; navigation.alignment = .centerY; navigation.spacing = 8
         root.addArrangedSubview(navigation)
 
         let setIn = NSButton(title: "Set In", target: controller, action: #selector(ClipEditorController.setInPoint))
+        let jumpIn = NSButton(title: "[", target: controller, action: #selector(ClipEditorController.jumpToInPoint))
+        jumpIn.toolTip = "Move to the In frame"
+        jumpIn.widthAnchor.constraint(equalToConstant: 30).isActive = true
         let setOut = NSButton(title: "Set Out", target: controller, action: #selector(ClipEditorController.setOutPoint))
+        let jumpOut = NSButton(title: "]", target: controller, action: #selector(ClipEditorController.jumpToOutPoint))
+        jumpOut.toolTip = "Move to the Out frame"
+        jumpOut.widthAnchor.constraint(equalToConstant: 30).isActive = true
         let reset = NSButton(title: "Reset", target: controller, action: #selector(ClipEditorController.resetRange))
-        let points = NSStackView(views: [setIn, controller.inLabel, setOut, controller.outLabel, reset])
+        let points = NSStackView(views: [setIn, jumpIn, controller.inLabel,
+                                         setOut, jumpOut, controller.outLabel, reset])
         points.orientation = .horizontal; points.alignment = .centerY; points.spacing = 12
         root.addArrangedSubview(points)
         controller.status.textColor = .secondaryLabelColor

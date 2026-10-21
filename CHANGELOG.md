@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added real-time playback and direct In/Out-point jump controls to the frame-accurate Adjust Clip editor.
+
 ## 3.1 - 2026-10-20
 
 - Added optional, metadata-only Rec.709 primaries, transfer, matrix and limited-range replacement in both H.264 VUI and MP4 container metadata for converted videos intended for YouTube.
