@@ -1808,6 +1808,25 @@ enum VideoCompatibility {
             sourceDetails.textColor = .secondaryLabelColor
             root.addArrangedSubview(sourceDetails)
 
+            // Give every checkbox line the same height, including lines that also
+            // contain a popup or push button. This keeps checkbox centres and the
+            // visible gaps between them consistent throughout both option groups.
+            func optionRow(_ views: [NSView]) -> NSStackView {
+                let row = NSStackView(views: views)
+                row.orientation = .horizontal
+                row.alignment = .centerY
+                row.spacing = 12
+                row.heightAnchor.constraint(equalToConstant: 26).isActive = true
+                return row
+            }
+            func optionGroup() -> NSStackView {
+                let group = NSStackView()
+                group.orientation = .vertical
+                group.alignment = .leading
+                group.spacing = 6
+                return group
+            }
+
             let frameRateValues = ["24", "24000/1001", "25", "30000/1001", "30", "50", "60000/1001", "60"]
             let frameRatePicker = NSPopUpButton(frame: .zero, pullsDown: false)
             frameRatePicker.addItems(withTitles: [
@@ -1834,7 +1853,7 @@ enum VideoCompatibility {
                 root.addArrangedSubview(note)
                 let toggle = NSButton(checkboxWithTitle: "Deinterlace converted copies", target: nil, action: nil)
                 toggle.state = .on
-                root.addArrangedSubview(toggle)
+                root.addArrangedSubview(optionRow([toggle]))
                 let picker = NSPopUpButton(frame: .zero, pullsDown: false)
                 let sourceRate = probe.frameRate > 0 ? probe.frameRate : 25
                 picker.addItems(withTitles: [
@@ -1843,8 +1862,7 @@ enum VideoCompatibility {
                 ])
                 picker.selectItem(at: 0)
                 picker.toolTip = "Field-rate output retains each field's distinct moment; frame-rate output preserves the source frame rate."
-                let row = NSStackView(views: [NSTextField(labelWithString: "Deinterlaced output"), picker])
-                row.orientation = .horizontal; row.spacing = 12
+                let row = optionRow([NSTextField(labelWithString: "Deinterlaced output"), picker])
                 root.addArrangedSubview(row)
                 deinterlaceToggle = toggle
                 deinterlaceModePicker = picker
@@ -1857,23 +1875,27 @@ enum VideoCompatibility {
             let dvdCopy = NSButton(checkboxWithTitle: "Create H.264/AAC - \(dvdSize.label)", target: nil, action: nil)
             let hdCopy = NSButton(checkboxWithTitle: "Create H.264/AAC - \(VideoOutputSize.hd720.label)", target: nil, action: nil)
             let fullHDCopy = NSButton(checkboxWithTitle: "Create H.264/AAC - \(VideoOutputSize.hd1080.label)", target: nil, action: nil)
-            if canSaveOriginal { root.addArrangedSubview(original) }
-            [sourceCopy, dvdCopy, hdCopy, fullHDCopy].forEach(root.addArrangedSubview)
+            let creationOptions = optionGroup()
+            if canSaveOriginal { creationOptions.addArrangedSubview(optionRow([original])) }
+            [sourceCopy, dvdCopy, hdCopy, fullHDCopy].forEach {
+                creationOptions.addArrangedSubview(optionRow([$0]))
+            }
+            root.addArrangedSubview(creationOptions)
             let handler = VideoOptionsHandler()
 
             let processingSpacer = NSView()
             processingSpacer.translatesAutoresizingMaskIntoConstraints = false
-            processingSpacer.heightAnchor.constraint(equalToConstant: 16).isActive = true
+            processingSpacer.heightAnchor.constraint(equalToConstant: 8).isActive = true
             root.addArrangedSubview(processingSpacer)
 
-            let frameRateRow = NSStackView(views: [frameRateToggle, frameRatePicker])
-            frameRateRow.orientation = .horizontal; frameRateRow.spacing = 12
-            root.addArrangedSubview(frameRateRow)
+            let processingOptions = optionGroup()
+            let frameRateRow = optionRow([frameRateToggle, frameRatePicker])
+            processingOptions.addArrangedSubview(frameRateRow)
             if probe.hasNonStandardFrameRate {
                 let note = NSTextField(wrappingLabelWithString:
                     "The source uses a non-standard frame rate; motion-compensated conversion is available.")
                 note.textColor = .secondaryLabelColor
-                root.addArrangedSubview(note)
+                processingOptions.addArrangedSubview(note)
             }
 
             var chosenClip: VideoClipRange?
@@ -1882,9 +1904,8 @@ enum VideoCompatibility {
             let clipSummary = NSTextField(labelWithString: "Full video")
             clipSummary.textColor = .secondaryLabelColor
             let editClip = ClosureButton(title: "Adjust Clip")
-            let clipRow = NSStackView(views: [clipToggle, clipSummary, editClip])
-            clipRow.orientation = .horizontal; clipRow.spacing = 12
-            root.addArrangedSubview(clipRow)
+            let clipRow = optionRow([clipToggle, clipSummary, editClip])
+            processingOptions.addArrangedSubview(clipRow)
 
             let stretch = NSButton(checkboxWithTitle: "Convert video to 16:9", target: nil, action: nil)
             let squeeze = NSButton(checkboxWithTitle: "Convert video to 4:3", target: nil, action: nil)
@@ -1894,27 +1915,26 @@ enum VideoCompatibility {
             stretch.target = handler; stretch.action = #selector(VideoOptionsHandler.chooseStretch(_:))
             squeeze.target = handler; squeeze.action = #selector(VideoOptionsHandler.chooseSqueeze(_:))
             handler.stretchButton = stretch; handler.squeezeButton = squeeze
-            root.addArrangedSubview(stretch)
-            root.addArrangedSubview(squeeze)
+            processingOptions.addArrangedSubview(optionRow([stretch]))
+            processingOptions.addArrangedSubview(optionRow([squeeze]))
 
             let forceRec709 = NSButton(checkboxWithTitle: "Force Rec.709 tags for YouTube", target: nil, action: nil)
             forceRec709.state = .off
             forceRec709.toolTip = "Replaces colour metadata with Rec.709 limited-range tags without applying a gamma, brightness or pixel-level colour conversion."
-            root.addArrangedSubview(forceRec709)
+            processingOptions.addArrangedSubview(optionRow([forceRec709]))
 
             let widescreen = NSButton(checkboxWithTitle: "Place converted video in a 16:9 frame", target: nil, action: nil)
             widescreen.state = .off
             widescreen.toolTip = "Adds black letterbox or pillarbox borders without stretching the picture. Leave this off to retain the video's natural frame shape."
             handler.widescreenButton = widescreen
-            root.addArrangedSubview(widescreen)
+            processingOptions.addArrangedSubview(optionRow([widescreen]))
 
             var chosenCrop = probe.detectedCrop
             let cropToggle = NSButton(checkboxWithTitle: "Remove embedded borders", target: nil, action: nil)
             cropToggle.state = .off
             let editCrop = ClosureButton(title: "Adjust Borders")
-            let cropRow = NSStackView(views: [cropToggle, editCrop])
-            cropRow.orientation = .horizontal; cropRow.spacing = 12
-            root.addArrangedSubview(cropRow)
+            let cropRow = optionRow([cropToggle, editCrop])
+            processingOptions.addArrangedSubview(cropRow)
 
             var chosenColor = VideoColorSettings(brightness: 0,
                 contrast: probe.detectedBlackFloor == nil ? 1 : 1.05,
@@ -1925,9 +1945,9 @@ enum VideoCompatibility {
                 blacks.toolTip = "Detected black level: \(floor) (normal video black is approximately 16)."
             }
             let editColour = ClosureButton(title: "Adjust Picture")
-            let colourRow = NSStackView(views: [blacks, editColour])
-            colourRow.orientation = .horizontal; colourRow.spacing = 12
-            root.addArrangedSubview(colourRow)
+            let colourRow = optionRow([blacks, editColour])
+            processingOptions.addArrangedSubview(colourRow)
+            root.addArrangedSubview(processingOptions)
 
             let buttonSpacer = NSView()
             buttonSpacer.translatesAutoresizingMaskIntoConstraints = false
@@ -3072,7 +3092,7 @@ enum MusicBrainzLookup {
             completion(.success([])); return
         }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
-        request.setValue("CDExplorer/3.1 (https://github.com/michaelsft/CD-Explorer)", forHTTPHeaderField: "User-Agent")
+        request.setValue("CDExplorer/3.2 (https://github.com/michaelsft/CD-Explorer)", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 20
         perform(request, audioCount: audio.count, attempt: 1, completion: completion)

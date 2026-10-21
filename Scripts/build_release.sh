@@ -29,35 +29,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$stage_dir/Open Source Licences" "$output_dir"
+mkdir -p "$stage_dir" "$output_dir"
 /bin/rm -f "$output_dir/CD-Explorer-$version.dmg" \
   "$output_dir/CD-Explorer-$version-Third-Party-Source.tar.gz" \
   "$output_dir/SHA256SUMS-$version.txt"
 
 "$project_dir/build.sh"
 /usr/bin/ditto "$project_dir/build/CD Explorer.app" "$stage_dir/CD Explorer.app"
-/bin/cp "$project_dir/LICENSE" "$stage_dir/Open Source Licences/CD Explorer GPLv3.txt"
-/bin/cp "$project_dir/ThirdParty/THIRD_PARTY_NOTICES.md" "$stage_dir/Open Source Licences/"
-/bin/cp "$project_dir/ThirdParty/DEPENDENCIES.md" "$stage_dir/Open Source Licences/"
-/bin/cp "$project_dir/ThirdParty/MPVKit-LICENSE.txt" "$stage_dir/Open Source Licences/MPVKit LGPLv3.txt"
-/bin/cp "$project_dir/BundledTools/COPYING.GPLv2" "$stage_dir/Open Source Licences/FFmpeg GPLv2.txt"
-/bin/cp "$project_dir/BundledTools/COPYING.x264" "$stage_dir/Open Source Licences/x264 GPLv2.txt"
 
-/usr/bin/printf '%s\n' \
-  'CD Explorer' \
-  '' \
-  'Drag CD Explorer to Applications.' \
-  '' \
-  'Source code, documentation and issue tracking are available from the CD Explorer GitHub repository.' \
-  'Licence information is included in the Open Source Licences folder.' \
-  > "$stage_dir/Read Me.txt"
-
-/opt/homebrew/bin/magick -size 720x460 gradient:'#13284a-#081426' \
+# Keep the installer focused on the one required action. Full application and
+# third-party licence texts remain bundled inside the app itself.
+/opt/homebrew/bin/magick -size 640x360 gradient:'#eef4ff-#cadbf2' \
   -font '/System/Library/Fonts/SFNS.ttf' \
-  -fill '#f3f7ff' -gravity north -pointsize 34 -annotate +0+44 'CD Explorer' \
-  -fill '#a9c7ff' -pointsize 17 -annotate +0+94 'Drag the app to Applications' \
-  -fill '#5e88c7' -stroke '#5e88c7' -strokewidth 4 -draw 'line 300,245 420,245' \
-  -fill '#5e88c7' -stroke none -draw 'polygon 420,245 396,230 396,260' \
+  -fill '#13284a' -gravity north -pointsize 32 -annotate +0+28 'CD Explorer' \
+  -fill '#45658f' -pointsize 16 -annotate +0+70 'Drag the app to Applications' \
+  -fill '#5e88c7' -stroke '#5e88c7' -strokewidth 4 -draw 'line 270,185 370,185' \
+  -fill '#5e88c7' -stroke none -draw 'polygon 370,185 348,171 348,199' \
   "$background"
 
 /opt/homebrew/bin/create-dmg \
@@ -65,13 +52,11 @@ mkdir -p "$stage_dir/Open Source Licences" "$output_dir"
   --volicon "$project_dir/build/CD Explorer.app/Contents/Resources/AppIcon.icns" \
   --background "$background" \
   --window-pos 180 120 \
-  --window-size 720 460 \
-  --icon-size 112 \
+  --window-size 640 360 \
+  --icon-size 88 \
   --text-size 13 \
-  --icon 'CD Explorer.app' 170 250 \
-  --app-drop-link 550 250 \
-  --icon 'Open Source Licences' 270 370 \
-  --icon 'Read Me.txt' 450 370 \
+  --icon 'CD Explorer.app' 155 190 \
+  --app-drop-link 485 190 \
   --hide-extension 'CD Explorer.app' \
   --no-internet-enable \
   "$dmg" "$stage_dir"

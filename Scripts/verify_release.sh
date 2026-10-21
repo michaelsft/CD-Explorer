@@ -39,8 +39,8 @@ app="$mount_dir/CD Explorer.app"
 [[ -x "$app/Contents/Resources/Tools/ffprobe" ]]
 [[ -f "$app/Contents/Resources/Open Source Licences/CD Explorer GPLv3.txt" ]]
 [[ -f "$app/Contents/Resources/Open Source Licences/MPVKit LGPLv3.txt" ]]
-[[ -f "$mount_dir/Open Source Licences/THIRD_PARTY_NOTICES.md" ]]
-[[ -f "$mount_dir/Open Source Licences/MPVKit LGPLv3.txt" ]]
+[[ -f "$app/Contents/Resources/Open Source Licences/THIRD_PARTY_NOTICES.md" ]]
+[[ -f "$app/Contents/Resources/Open Source Licences/DEPENDENCIES.md" ]]
 
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$app"
 /usr/bin/lipo -verify_arch arm64 "$app/Contents/MacOS/CDExplorer"
