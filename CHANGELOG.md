@@ -1,13 +1,10 @@
 # Changelog
 
-## Unreleased
-
-- Added blue selected-state indicators to the Adjust Clip Set In and Set Out buttons.
-- Kept paused and frame-stepped Adjust Clip previews on the same libmpv rendering path as playback, preserving identical picture size and proportions.
-
 ## 3.2 - 2026-10-21
 
 - Added bundled libmpv playback and direct In/Out-point jump controls to the frame-accurate Adjust Clip editor, including MPEG-2/AC-3 MKV support without external software.
+- Added blue selected-state indicators to the Adjust Clip Set In and Set Out buttons.
+- Kept paused and frame-stepped Adjust Clip previews on the same libmpv rendering path as playback, preserving identical picture size and proportions.
 - Standardised the spacing between all creation and processing options in the video-conversion dialog.
 
 ## 3.1 - 2026-10-20
