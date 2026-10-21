@@ -1169,9 +1169,11 @@ private final class ClipPlaybackView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
+        let backingLayer = CALayer()
+        backingLayer.backgroundColor = NSColor.black.cgColor
+        layer = backingLayer
         playerLayer.videoGravity = .resizeAspect
-        layer?.addSublayer(playerLayer)
+        backingLayer.addSublayer(playerLayer)
         stillImage.imageScaling = .scaleProportionallyUpOrDown
         stillImage.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stillImage)
@@ -1197,6 +1199,10 @@ private final class ClipPlaybackView: NSView {
 
     func showPlayer() {
         stillImage.isHidden = true
+    }
+
+    func showCurrentStill() {
+        stillImage.isHidden = false
     }
 }
 
@@ -1251,6 +1257,7 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         next.target = self; next.action = #selector(nextFrame)
         playPause.target = self; playPause.action = #selector(togglePlayback)
         playPause.toolTip = "Play or pause"
+        updatePlayPauseAppearance()
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1.0 / 30.0,
                                                                           preferredTimescale: 600),
                                                        queue: .main) { [weak self] time in
@@ -1281,11 +1288,20 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         if isPlaying {
             pausePlayback()
         } else {
-            seekPlayer(to: currentFrame)
-            preview.showPlayer()
-            player.play()
             isPlaying = true
-            playPause.title = "❚❚"
+            updatePlayPauseAppearance()
+            preview.showPlayer()
+            let time = playerTime(for: currentFrame)
+            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                DispatchQueue.main.async {
+                    guard let self, finished, self.isPlaying else { return }
+                    if self.player.currentItem?.status == .failed {
+                        self.playbackFailed()
+                    } else {
+                        self.player.playImmediately(atRate: 1)
+                    }
+                }
+            }
         }
     }
     @objc func setInPoint() {
@@ -1327,8 +1343,11 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
     }
 
     private func seekPlayer(to frame: Int) {
-        let time = CMTime(seconds: Double(frame) / max(0.001, probe.frameRate), preferredTimescale: 60_000)
-        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        player.seek(to: playerTime(for: frame), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func playerTime(for frame: Int) -> CMTime {
+        CMTime(seconds: Double(frame) / max(0.001, probe.frameRate), preferredTimescale: 60_000)
     }
 
     private func playbackAdvanced(to time: CMTime) {
@@ -1339,15 +1358,29 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
 
     private func playbackEnded() {
         isPlaying = false
-        playPause.title = "▶"
+        updatePlayPauseAppearance()
         setCurrent(totalFrames - 1, loadImage: false)
+    }
+
+    private func playbackFailed() {
+        player.pause()
+        isPlaying = false
+        updatePlayPauseAppearance()
+        preview.showCurrentStill()
+        status.stringValue = player.currentItem?.error?.localizedDescription ?? "This source could not be played."
+    }
+
+    private func updatePlayPauseAppearance() {
+        playPause.title = isPlaying ? "❚❚" : "▶"
+        playPause.bezelColor = isPlaying ? .systemOrange : .systemGreen
+        playPause.contentTintColor = .white
     }
 
     func pausePlayback() {
         guard isPlaying else { return }
         player.pause()
         isPlaying = false
-        playPause.title = "▶"
+        updatePlayPauseAppearance()
     }
 
     func stopPlayback() {
@@ -1388,7 +1421,7 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
             let image = VideoCompatibility.previewFrame(source: self.source, frame: frame)
             DispatchQueue.main.async {
                 guard requestedGeneration == self.generation else { return }
-                self.preview.showStill(image)
+                if !self.isPlaying { self.preview.showStill(image) }
                 self.status.stringValue = image == nil ? "This frame could not be previewed." : ""
             }
         }
