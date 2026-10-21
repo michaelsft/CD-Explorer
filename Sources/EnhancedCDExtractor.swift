@@ -1823,7 +1823,8 @@ enum VideoCompatibility {
     }
 
     static func askUser(fileName: String, source: URL, probe: VideoProbe,
-                        window preferredWindow: NSWindow?, canSaveOriginal: Bool = true) -> VideoExtractionRequest? {
+                        window preferredWindow: NSWindow?, canSaveOriginal: Bool = true,
+                        onRequest: ((VideoExtractionRequest) -> Void)? = nil) -> VideoExtractionRequest? {
         let dvdSize: VideoOutputSize = probe.usesPALFrameRate ? .dvdPAL : .dvdNTSC
         var request: VideoExtractionRequest?
         let finished = DispatchSemaphore(value: 0)
@@ -1952,11 +1953,11 @@ enum VideoCompatibility {
             }
 
             var chosenClip: VideoClipRange?
-            let clipToggle = NSButton(checkboxWithTitle: "Converted range", target: nil, action: nil)
+            let clipToggle = NSButton(checkboxWithTitle: "Change converted range", target: nil, action: nil)
             clipToggle.state = .off
             let clipSummary = NSTextField(labelWithString: "Full video")
             clipSummary.textColor = .secondaryLabelColor
-            let editClip = ClosureButton(title: "Adjust Clip")
+            let editClip = ClosureButton(title: "Adjust Clip Length")
             let clipRow = optionRow([clipToggle, clipSummary, editClip])
             processingOptions.addArrangedSubview(clipRow)
 
@@ -2008,7 +2009,7 @@ enum VideoCompatibility {
             root.addArrangedSubview(buttonSpacer)
 
             let buttons = NSStackView(); buttons.orientation = .horizontal; buttons.spacing = 10
-            let cancel = NSButton(title: "Cancel", target: handler, action: #selector(VideoOptionsHandler.cancel))
+            let cancel = NSButton(title: "Close", target: handler, action: #selector(VideoOptionsHandler.cancel))
             let proceed = NSButton(title: "Continue", target: handler, action: #selector(VideoOptionsHandler.accept))
             proceed.keyEquivalent = "\r"
             buttons.addArrangedSubview(cancel); buttons.addArrangedSubview(proceed)
@@ -2125,12 +2126,19 @@ enum VideoCompatibility {
                         panel.makeKeyAndOrderFront(nil)
                         return
                     }
-                    request = buildRequest(destination)
-                    closePanel()
+                    let submittedRequest = buildRequest(destination)
+                    if let onRequest {
+                        onRequest(submittedRequest)
+                        panel.makeKeyAndOrderFront(nil)
+                    } else {
+                        request = submittedRequest
+                        closePanel()
+                    }
                 }
             }
             handler.cancelAction = { closePanel() }
         }
+        if onRequest != nil { return nil }
         finished.wait()
         return request
     }
@@ -2288,9 +2296,12 @@ enum VideoCompatibility {
                                        completion: @escaping (Bool, VideoClipRange?) -> Void) {
         let owner = parent.parent ?? parent
         let controller = ClipEditorController(source: source, probe: probe, initial: initial)
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 940, height: 690),
+        let previewWidth: CGFloat = 816
+        let previewHeight: CGFloat = 459
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0,
+                                                width: previewWidth + 40, height: 690),
                             styleMask: [.titled], backing: .buffered, defer: false)
-        panel.title = "Adjust Clip"
+        panel.title = "Adjust Clip Length"
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView = NSView(); panel.contentView?.addSubview(root)
@@ -2303,11 +2314,11 @@ enum VideoCompatibility {
         root.addArrangedSubview(NSTextField(wrappingLabelWithString:
             "Move to an exact source frame, then mark it as the In or Out point. The chosen inclusive range is applied to every re-encoded version."))
         controller.preview.translatesAutoresizingMaskIntoConstraints = false
-        controller.preview.widthAnchor.constraint(equalToConstant: 900).isActive = true
-        controller.preview.heightAnchor.constraint(equalToConstant: 460).isActive = true
+        controller.preview.widthAnchor.constraint(equalToConstant: previewWidth).isActive = true
+        controller.preview.heightAnchor.constraint(equalToConstant: previewHeight).isActive = true
         root.addArrangedSubview(controller.preview)
         controller.timeline.translatesAutoresizingMaskIntoConstraints = false
-        controller.timeline.widthAnchor.constraint(equalToConstant: 900).isActive = true
+        controller.timeline.widthAnchor.constraint(equalToConstant: previewWidth).isActive = true
         controller.timeline.heightAnchor.constraint(equalToConstant: 26).isActive = true
         root.addArrangedSubview(controller.timeline)
 
@@ -3698,28 +3709,29 @@ final class AppModel: ObservableObject {
     private func prepareLoadedVideo(_ url: URL, presentationWindow: NSWindow?) {
         let cancellationTicket = OperationCancellation.shared.begin()
         busy = true; progress = 0; status = "Analysing \(url.lastPathComponent)…"
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
             do {
                 let initial = try VideoCompatibility.inspect(url)
                 try OperationCancellation.shared.check(cancellationTicket)
                 let probe = VideoCompatibility.detectingEmbeddedLetterbox(in: url, probe: initial)
                 try OperationCancellation.shared.check(cancellationTicket)
-                let request = VideoCompatibility.askUser(fileName: url.lastPathComponent,
-                                                         source: url, probe: probe,
-                                                         window: presentationWindow,
-                                                         canSaveOriginal: false)
                 DispatchQueue.main.async {
                     guard OperationCancellation.shared.isCurrent(cancellationTicket) else { return }
-                    guard let request else {
-                        self.busy = false; self.progress = 0; self.status = "Cancelled."
-                        return
-                    }
-                    guard let destination = request.destination else {
-                        self.busy = false; self.progress = 0; self.status = "Cancelled."
-                        return
-                    }
-                    self.performLoadedVideoConversion(source: url, probe: probe, request: request,
-                                                      destination: destination)
+                    self.busy = false; self.progress = 0
+                    self.status = "Ready to convert \(url.lastPathComponent)."
+                    _ = VideoCompatibility.askUser(fileName: url.lastPathComponent,
+                        source: url, probe: probe, window: presentationWindow,
+                        canSaveOriginal: false) { [weak self] request in
+                            guard let self, let destination = request.destination else { return }
+                            guard !self.busy else {
+                                self.status = "Wait for the current operation to finish before converting again."
+                                return
+                            }
+                            self.performLoadedVideoConversion(source: url, probe: probe,
+                                                              request: request,
+                                                              destination: destination)
+                        }
                 }
             } catch {
                 DispatchQueue.main.async {
