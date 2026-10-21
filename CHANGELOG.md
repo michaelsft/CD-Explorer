@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Added blue selected-state indicators to the Adjust Clip Set In and Set Out buttons.
+- Kept paused and frame-stepped Adjust Clip previews on the same libmpv rendering path as playback, preserving identical picture size and proportions.
 
 ## 3.2 - 2026-10-21
 

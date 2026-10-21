@@ -1573,8 +1573,13 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         timeline.currentFrame = value
         updateLabels()
         if loadImage {
-            seekPlayer(to: value)
-            loadPreview()
+            if player != nil {
+                preview.showPlayer()
+                seekPlayer(to: value)
+                status.stringValue = ""
+            } else {
+                loadPreview()
+            }
         }
     }
 
@@ -1641,6 +1646,12 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
     }
 
     func loadPreview() {
+        if player != nil {
+            preview.showPlayer()
+            seekPlayer(to: currentFrame)
+            status.stringValue = ""
+            return
+        }
         generation += 1
         let requestedGeneration = generation
         let frame = currentFrame
@@ -2347,7 +2358,9 @@ enum VideoCompatibility {
         let output = FileManager.default.temporaryDirectory
             .appendingPathComponent("CDExplorer-frame-\(UUID().uuidString).png")
         defer { try? FileManager.default.removeItem(at: output) }
-        let filter = "select=eq(n\\,\(max(0, frame))),scale=900:460:force_original_aspect_ratio=decrease:flags=lanczos"
+        // Match libmpv's display geometry: turn non-square source pixels into
+        // square pixels before fitting the paused still into the preview area.
+        let filter = "select=eq(n\\,\(max(0, frame))),scale=trunc(iw*sar/2)*2:ih:flags=lanczos,setsar=1,scale=900:460:force_original_aspect_ratio=decrease:flags=lanczos"
         let arguments = ["-y", "-hide_banner", "-loglevel", "error", "-i", source.path,
                          "-vf", filter, "-frames:v", "1", output.path]
         if (try? CommandRunner.run(ffmpeg, arguments, timeout: 120)) == nil { return nil }
