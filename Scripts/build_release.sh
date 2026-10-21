@@ -39,6 +39,7 @@ mkdir -p "$stage_dir/Open Source Licences" "$output_dir"
 /bin/cp "$project_dir/LICENSE" "$stage_dir/Open Source Licences/CD Explorer GPLv3.txt"
 /bin/cp "$project_dir/ThirdParty/THIRD_PARTY_NOTICES.md" "$stage_dir/Open Source Licences/"
 /bin/cp "$project_dir/ThirdParty/DEPENDENCIES.md" "$stage_dir/Open Source Licences/"
+/bin/cp "$project_dir/ThirdParty/MPVKit-LICENSE.txt" "$stage_dir/Open Source Licences/MPVKit LGPLv3.txt"
 /bin/cp "$project_dir/BundledTools/COPYING.GPLv2" "$stage_dir/Open Source Licences/FFmpeg GPLv2.txt"
 /bin/cp "$project_dir/BundledTools/COPYING.x264" "$stage_dir/Open Source Licences/x264 GPLv2.txt"
 

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Added real-time playback and direct In/Out-point jump controls to the frame-accurate Adjust Clip editor.
+- Added bundled libmpv playback and direct In/Out-point jump controls to the frame-accurate Adjust Clip editor, including MPEG-2/AC-3 MKV support without external software.
 
 ## 3.1 - 2026-10-20
 

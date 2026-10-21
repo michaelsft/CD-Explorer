@@ -31,11 +31,12 @@ Commercial Enhanced CDs often contain music, videos, artwork and interactive fil
 - Loads local videos without requiring a disc.
 - Converts video to H.264/AAC at original size, PAL/NTSC DVD size, 720p or 1080p.
 - Offers frame-accurate In/Out points, embedded-border removal and picture adjustment.
+- Plays media inside Adjust Clip using bundled libmpv, including formats that macOS AVPlayer cannot open.
 - Supports aspect-ratio correction, optional 16:9 framing and proportional Lanczos scaling.
 - Optionally replaces incorrect video colour metadata with Rec.709 limited-range tags for YouTube without applying a pixel-level colour conversion.
 - Detects interlacing and offers BWDIF deinterlacing with the detected field order.
 - Offers motion-compensated frame-rate conversion for low or unusual frame rates.
-- Includes FFmpeg and FFprobe for both Apple silicon and Intel Macs.
+- Includes FFmpeg, FFprobe and libmpv for both Apple silicon and Intel Macs.
 
 ## Requirements
 
@@ -57,7 +58,7 @@ Nothing is selected automatically, so extraction only includes the items you exp
 
 ## Building from source
 
-The build requires Xcode command-line tools and ImageMagick:
+The build requires Xcode command-line tools and ImageMagick. Swift Package Manager downloads the pinned MPVKit 1.0.0 dependency during the first build:
 
 ```bash
 xcode-select --install
@@ -79,7 +80,7 @@ The release builder creates:
 - `CD-Explorer-3.1-Third-Party-Source.tar.gz`
 - `SHA256SUMS-3.1.txt`
 
-Upload all three files to the same GitHub Release. The repository tag supplies CD Explorer's own source; the separate source archive supplies the exact FFmpeg and x264 sources corresponding to the bundled executables.
+Upload all three files to the same GitHub Release. The repository tag supplies CD Explorer's own source and the pinned MPVKit package manifest; the separate source archive supplies the exact FFmpeg and x264 sources corresponding to the bundled executables.
 
 ## macOS Gatekeeper
 
@@ -97,5 +98,5 @@ CD Explorer repeatedly reads and compares audio data, retries inconsistent secto
 
 CD Explorer is copyright © 2026 CD Explorer contributors and is distributed under the GNU General Public License version 3 or, at your option, any later version. See [LICENSE](LICENSE).
 
-Bundled FFmpeg and x264 components are distributed under GPL-compatible terms. See [ThirdParty/THIRD_PARTY_NOTICES.md](ThirdParty/THIRD_PARTY_NOTICES.md) and [ThirdParty/DEPENDENCIES.md](ThirdParty/DEPENDENCIES.md).
+Bundled FFmpeg, x264 and MPVKit/libmpv components are distributed under GPL-compatible terms. See [ThirdParty/THIRD_PARTY_NOTICES.md](ThirdParty/THIRD_PARTY_NOTICES.md) and [ThirdParty/DEPENDENCIES.md](ThirdParty/DEPENDENCIES.md).
 

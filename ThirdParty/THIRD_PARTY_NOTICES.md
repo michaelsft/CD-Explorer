@@ -27,3 +27,14 @@ CD Explorer optionally retrieves disc metadata from MusicBrainz. MusicBrainz is 
 
 MusicBrainz documentation and service terms: https://musicbrainz.org/doc/MusicBrainz_API
 
+## MPVKit and libmpv
+
+CD Explorer links the `MPVKit-GPL` product from MPVKit 1.0.0 into the application to provide embedded video and audio playback in Adjust Clip. The package contains libmpv and its required media libraries for Apple silicon and Intel Macs; users do not need to install mpv separately.
+
+- MPVKit project: https://github.com/mpvkit/MPVKit
+- Exact release: https://github.com/mpvkit/MPVKit/releases/tag/1.0.0
+- mpv project: https://mpv.io/
+- Package licence file: GNU Lesser General Public License version 3
+
+The complete MPVKit licence text is included as `ThirdParty/MPVKit-LICENSE.txt` and inside the built application. CD Explorer itself is distributed under GPLv3 or later, which is compatible with the bundled GPL build.
+

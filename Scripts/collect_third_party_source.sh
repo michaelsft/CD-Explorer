@@ -49,6 +49,9 @@ source_root="$stage_dir/CD-Explorer-$version-Third-Party-Source"
 /bin/cp "$project_dir/BundledTools/COPYING.x264" "$source_root/"
 /bin/cp "$project_dir/ThirdParty/DEPENDENCIES.md" "$source_root/"
 /bin/cp "$project_dir/ThirdParty/THIRD_PARTY_NOTICES.md" "$source_root/"
+/bin/cp "$project_dir/ThirdParty/MPVKit-LICENSE.txt" "$source_root/"
+/bin/cp "$project_dir/Package.swift" "$source_root/"
+/bin/cp "$project_dir/Package.resolved" "$source_root/"
 
 (
   cd "$stage_dir"

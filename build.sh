@@ -32,15 +32,10 @@ fi
   --minimum-deployment-target 13.0 --app-icon AppIcon \
   --output-partial-info-plist "$build_dir/asset-info.plist" "$project_dir/Assets.xcassets"
 
-architectures=(arm64 x86_64)
-for arch in $architectures; do
-  /usr/bin/xcrun swiftc -parse-as-library -swift-version 5 -O -target "$arch-apple-macos13.0" \
-    -module-cache-path "$build_dir/ModuleCache" \
-    "$project_dir/Sources/EnhancedCDExtractor.swift" \
-    -o "$build_dir/CDExplorer-$arch"
-done
-/usr/bin/lipo -create "$build_dir/CDExplorer-arm64" "$build_dir/CDExplorer-x86_64" \
-  -output "$contents/MacOS/CDExplorer"
+/usr/bin/swift build --package-path "$project_dir" -c release --arch arm64 --arch x86_64
+swift_bin_dir=$(/usr/bin/swift build --package-path "$project_dir" -c release \
+  --arch arm64 --arch x86_64 --show-bin-path)
+/bin/cp "$swift_bin_dir/CDExplorer" "$contents/MacOS/CDExplorer"
 /bin/cp "$project_dir/Info.plist" "$contents/Info.plist"
 mkdir -p "$contents/Resources/Tools" "$contents/Resources/FFmpeg" "$contents/Resources/Open Source Licences"
 /bin/cp "$project_dir/BundledTools/ffmpeg" "$contents/Resources/Tools/ffmpeg"
@@ -52,6 +47,7 @@ mkdir -p "$contents/Resources/Tools" "$contents/Resources/FFmpeg" "$contents/Res
 /bin/cp "$project_dir/LICENSE" "$contents/Resources/Open Source Licences/CD Explorer GPLv3.txt"
 /bin/cp "$project_dir/ThirdParty/THIRD_PARTY_NOTICES.md" "$contents/Resources/Open Source Licences/THIRD_PARTY_NOTICES.md"
 /bin/cp "$project_dir/ThirdParty/DEPENDENCIES.md" "$contents/Resources/Open Source Licences/DEPENDENCIES.md"
+/bin/cp "$project_dir/ThirdParty/MPVKit-LICENSE.txt" "$contents/Resources/Open Source Licences/MPVKit LGPLv3.txt"
 /usr/bin/codesign --force --sign - "$contents/Resources/Tools/ffmpeg"
 /usr/bin/codesign --force --sign - "$contents/Resources/Tools/ffprobe"
 /usr/bin/codesign --force --deep --sign - "$app_dir"

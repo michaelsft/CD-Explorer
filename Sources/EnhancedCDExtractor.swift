@@ -3,6 +3,8 @@ import AppKit
 import AVFoundation
 import Foundation
 import Darwin
+import Libmpv
+import OpenGL.GL
 import UniformTypeIdentifiers
 
 struct CDTrack: Identifiable, Hashable {
@@ -1158,26 +1160,119 @@ private final class ClipTimelineView: NSControl {
     }
 }
 
-private final class ClipPlaybackView: NSView {
-    private let playerLayer = AVPlayerLayer()
-    private let stillImage = NSImageView()
+private func mpvOpenGLGetProcAddress(_ context: UnsafeMutableRawPointer?,
+                                     _ name: UnsafePointer<CChar>?) -> UnsafeMutableRawPointer? {
+    guard let name,
+          let bundle = CFBundleGetBundleWithIdentifier("com.apple.opengl" as CFString),
+          let symbol = CFStringCreateWithCString(kCFAllocatorDefault, name, CFStringBuiltInEncodings.ASCII.rawValue)
+    else { return nil }
+    return CFBundleGetFunctionPointerForName(bundle, symbol)
+}
 
-    var player: AVPlayer? {
-        didSet { playerLayer.player = player }
+private func mpvRenderUpdate(_ context: UnsafeMutableRawPointer?) {
+    guard let context else { return }
+    let view = Unmanaged<MpvOpenGLView>.fromOpaque(context).takeUnretainedValue()
+    DispatchQueue.main.async { view.needsDisplay = true }
+}
+
+private final class MpvOpenGLView: NSOpenGLView {
+    private var mpvRenderContext: OpaquePointer?
+
+    init() {
+        let attributes: [NSOpenGLPixelFormatAttribute] = [
+            NSOpenGLPixelFormatAttribute(NSOpenGLPFADoubleBuffer),
+            NSOpenGLPixelFormatAttribute(NSOpenGLPFAAccelerated),
+            0
+        ]
+        super.init(frame: .zero, pixelFormat: NSOpenGLPixelFormat(attributes: attributes))!
+        wantsBestResolutionOpenGLSurface = true
+        var swapInterval: GLint = 1
+        openGLContext?.setValues(&swapInterval, for: .swapInterval)
     }
+
+    required init?(coder: NSCoder) { nil }
+
+    func createRenderer(for handle: OpaquePointer) -> String? {
+        openGLContext?.makeCurrentContext()
+        var apiName = Array("opengl".utf8CString)
+        var initParameters = mpv_opengl_init_params(get_proc_address: mpvOpenGLGetProcAddress,
+                                                    get_proc_address_ctx: nil)
+        var created: OpaquePointer?
+        let result = apiName.withUnsafeMutableBufferPointer { apiBuffer in
+            withUnsafeMutablePointer(to: &initParameters) { initPointer in
+                var parameters = [
+                    mpv_render_param(type: MPV_RENDER_PARAM_API_TYPE,
+                                     data: UnsafeMutableRawPointer(apiBuffer.baseAddress)),
+                    mpv_render_param(type: MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
+                                     data: UnsafeMutableRawPointer(initPointer)),
+                    mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil)
+                ]
+                return mpv_render_context_create(&created, handle, &parameters)
+            }
+        }
+        guard result >= 0, let created else {
+            return "libmpv could not initialise its video renderer."
+        }
+        mpvRenderContext = created
+        mpv_render_context_set_update_callback(created, mpvRenderUpdate,
+                                               Unmanaged.passUnretained(self).toOpaque())
+        return nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let mpvRenderContext else {
+            glClearColor(0, 0, 0, 1)
+            glClear(GLbitfield(GL_COLOR_BUFFER_BIT))
+            openGLContext?.flushBuffer()
+            return
+        }
+        openGLContext?.makeCurrentContext()
+        let backing = convertToBacking(bounds).size
+        var framebuffer = mpv_opengl_fbo(fbo: 0, w: Int32(max(1, backing.width)),
+                                         h: Int32(max(1, backing.height)), internal_format: 0)
+        var flip: Int32 = 1
+        withUnsafeMutablePointer(to: &framebuffer) { framebufferPointer in
+            withUnsafeMutablePointer(to: &flip) { flipPointer in
+                var parameters = [
+                    mpv_render_param(type: MPV_RENDER_PARAM_OPENGL_FBO,
+                                     data: UnsafeMutableRawPointer(framebufferPointer)),
+                    mpv_render_param(type: MPV_RENDER_PARAM_FLIP_Y,
+                                     data: UnsafeMutableRawPointer(flipPointer)),
+                    mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil)
+                ]
+                mpv_render_context_render(mpvRenderContext, &parameters)
+            }
+        }
+        openGLContext?.flushBuffer()
+    }
+
+    func tearDown() {
+        guard let mpvRenderContext else { return }
+        openGLContext?.makeCurrentContext()
+        mpv_render_context_set_update_callback(mpvRenderContext, nil, nil)
+        mpv_render_context_free(mpvRenderContext)
+        self.mpvRenderContext = nil
+    }
+}
+
+private final class ClipPlaybackView: NSView {
+    private let videoView = MpvOpenGLView()
+    private let stillImage = NSImageView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        let backingLayer = CALayer()
-        backingLayer.backgroundColor = NSColor.black.cgColor
-        layer = backingLayer
-        playerLayer.videoGravity = .resizeAspect
-        backingLayer.addSublayer(playerLayer)
+        layer?.backgroundColor = NSColor.black.cgColor
+        videoView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(videoView)
         stillImage.imageScaling = .scaleProportionallyUpOrDown
         stillImage.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stillImage)
         NSLayoutConstraint.activate([
+            videoView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            videoView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            videoView.topAnchor.constraint(equalTo: topAnchor),
+            videoView.bottomAnchor.constraint(equalTo: bottomAnchor),
             stillImage.leadingAnchor.constraint(equalTo: leadingAnchor),
             stillImage.trailingAnchor.constraint(equalTo: trailingAnchor),
             stillImage.topAnchor.constraint(equalTo: topAnchor),
@@ -1187,10 +1282,8 @@ private final class ClipPlaybackView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
-    override func layout() {
-        super.layout()
-        playerLayer.frame = bounds
-    }
+    func createRenderer(for handle: OpaquePointer) -> String? { videoView.createRenderer(for: handle) }
+    func tearDown() { videoView.tearDown() }
 
     func showStill(_ image: NSImage?) {
         stillImage.image = image
@@ -1204,6 +1297,120 @@ private final class ClipPlaybackView: NSView {
     func showCurrentStill() {
         stillImage.isHidden = false
     }
+}
+
+private final class MpvClipPlayer {
+    private var handle: OpaquePointer?
+    private weak var preview: ClipPlaybackView?
+    private var pollTimer: Timer?
+    private(set) var isPlaying = false
+    var onTimeChange: ((Double) -> Void)?
+    var onEnd: (() -> Void)?
+    var onReady: (() -> Void)?
+    var onError: ((String) -> Void)?
+
+    init(source: URL, preview: ClipPlaybackView) throws {
+        guard let created = mpv_create() else { throw PlayerError("libmpv could not be started.") }
+        handle = created
+        self.preview = preview
+        mpv_set_option_string(created, "config", "no")
+        mpv_set_option_string(created, "terminal", "no")
+        mpv_set_option_string(created, "keep-open", "yes")
+        mpv_set_option_string(created, "pause", "yes")
+        mpv_set_option_string(created, "hwdec", "auto-safe")
+        // Without this explicit video output, mpv's macOS backend creates its own
+        // player window instead of sending frames to our render context.
+        mpv_set_option_string(created, "vo", "libmpv")
+        guard mpv_initialize(created) >= 0 else {
+            mpv_terminate_destroy(created); handle = nil
+            throw PlayerError("libmpv could not be initialised.")
+        }
+        if let message = preview.createRenderer(for: created) {
+            mpv_terminate_destroy(created); handle = nil
+            throw PlayerError(message)
+        }
+        let loadResult = command(["loadfile", source.path, "replace"])
+        guard loadResult >= 0 else {
+            stop()
+            throw PlayerError(errorText(loadResult))
+        }
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            self?.poll()
+        }
+    }
+
+    struct PlayerError: LocalizedError {
+        let message: String
+        init(_ message: String) { self.message = message }
+        var errorDescription: String? { message }
+    }
+
+    func play(from seconds: Double) {
+        seek(to: seconds)
+        setFlag("pause", false)
+        isPlaying = true
+    }
+
+    func pause() {
+        setFlag("pause", true)
+        isPlaying = false
+    }
+
+    func seek(to seconds: Double) {
+        _ = command(["seek", String(format: "%.9f", max(0, seconds)), "absolute+exact"])
+    }
+
+    func stop() {
+        pollTimer?.invalidate(); pollTimer = nil
+        preview?.tearDown()
+        if let handle { mpv_terminate_destroy(handle) }
+        handle = nil
+    }
+
+    private func poll() {
+        guard let handle else { return }
+        while let event = mpv_wait_event(handle, 0), event.pointee.event_id != MPV_EVENT_NONE {
+            switch event.pointee.event_id {
+            case MPV_EVENT_FILE_LOADED:
+                onReady?()
+            case MPV_EVENT_END_FILE:
+                let end = event.pointee.data?.assumingMemoryBound(to: mpv_event_end_file.self).pointee
+                if let end, end.error < 0 { onError?(errorText(end.error)) }
+                else { isPlaying = false; onEnd?() }
+            default:
+                break
+            }
+        }
+        guard isPlaying else { return }
+        var seconds = 0.0
+        if mpv_get_property(handle, "time-pos", MPV_FORMAT_DOUBLE, &seconds) >= 0 {
+            onTimeChange?(seconds)
+        }
+    }
+
+    private func setFlag(_ name: String, _ enabled: Bool) {
+        guard let handle else { return }
+        var flag: Int32 = enabled ? 1 : 0
+        _ = mpv_set_property(handle, name, MPV_FORMAT_FLAG, &flag)
+    }
+
+    @discardableResult private func command(_ arguments: [String]) -> Int32 {
+        guard let handle else { return Int32(MPV_ERROR_UNINITIALIZED.rawValue) }
+        let strings = arguments.map { strdup($0) }
+        defer { strings.forEach { free($0) } }
+        var pointers: [UnsafePointer<CChar>?] = strings.map { pointer in
+            pointer.map { UnsafePointer<CChar>($0) }
+        }
+        pointers.append(nil)
+        return mpv_command(handle, &pointers)
+    }
+
+    private func errorText(_ code: Int32) -> String {
+        guard let text = mpv_error_string(code) else { return "libmpv could not open this video." }
+        return "libmpv: " + String(cString: text)
+    }
+
+    deinit { stop() }
 }
 
 private final class ClipEditorController: NSObject, NSTextFieldDelegate {
@@ -1225,9 +1432,7 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
     private(set) var outFrame: Int
     private var currentFrameIndex: Int
     private var generation = 0
-    private let player: AVPlayer
-    private var timeObserver: Any?
-    private var endObserver: NSObjectProtocol?
+    private var player: MpvClipPlayer?
     private var isPlaying = false
 
     init(source: URL, probe: VideoProbe, initial: VideoClipRange?) {
@@ -1239,9 +1444,17 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         self.outFrame = max(self.inFrame, min((initial.map { $0.endFrameExclusive - 1 } ?? totalFrames - 1), totalFrames - 1))
         self.currentFrameIndex = self.inFrame
         self.timeline = ClipTimelineView(totalFrames: totalFrames)
-        self.player = AVPlayer(url: source)
         super.init()
-        preview.player = player
+        do {
+            let player = try MpvClipPlayer(source: source, preview: preview)
+            self.player = player
+            player.onTimeChange = { [weak self] seconds in self?.playbackAdvanced(to: seconds) }
+            player.onEnd = { [weak self] in self?.playbackEnded() }
+            player.onReady = { [weak self] in self?.preview.showPlayer() }
+            player.onError = { [weak self] message in self?.playbackFailed(message) }
+        } catch {
+            status.stringValue = error.localizedDescription
+        }
         timeline.currentFrame = currentFrameIndex; timeline.inFrame = inFrame; timeline.outFrame = outFrame
         timeline.onFrameChange = { [weak self] frame, final in
             guard let self else { return }
@@ -1258,15 +1471,6 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         playPause.target = self; playPause.action = #selector(togglePlayback)
         playPause.toolTip = "Play or pause"
         updatePlayPauseAppearance()
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1.0 / 30.0,
-                                                                          preferredTimescale: 600),
-                                                       queue: .main) { [weak self] time in
-            self?.playbackAdvanced(to: time)
-        }
-        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
-                                                              object: player.currentItem, queue: .main) { [weak self] _ in
-            self?.playbackEnded()
-        }
         updateLabels()
     }
 
@@ -1291,17 +1495,7 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
             isPlaying = true
             updatePlayPauseAppearance()
             preview.showPlayer()
-            let time = playerTime(for: currentFrame)
-            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                DispatchQueue.main.async {
-                    guard let self, finished, self.isPlaying else { return }
-                    if self.player.currentItem?.status == .failed {
-                        self.playbackFailed()
-                    } else {
-                        self.player.playImmediately(atRate: 1)
-                    }
-                }
-            }
+            player?.play(from: seconds(for: currentFrame))
         }
     }
     @objc func setInPoint() {
@@ -1343,16 +1537,16 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
     }
 
     private func seekPlayer(to frame: Int) {
-        player.seek(to: playerTime(for: frame), toleranceBefore: .zero, toleranceAfter: .zero)
+        player?.seek(to: seconds(for: frame))
     }
 
-    private func playerTime(for frame: Int) -> CMTime {
-        CMTime(seconds: Double(frame) / max(0.001, probe.frameRate), preferredTimescale: 60_000)
+    private func seconds(for frame: Int) -> Double {
+        Double(frame) / max(0.001, probe.frameRate)
     }
 
-    private func playbackAdvanced(to time: CMTime) {
-        guard isPlaying, time.isNumeric else { return }
-        let frame = min(totalFrames - 1, max(0, Int((time.seconds * probe.frameRate).rounded(.down))))
+    private func playbackAdvanced(to seconds: Double) {
+        guard isPlaying, seconds.isFinite else { return }
+        let frame = min(totalFrames - 1, max(0, Int((seconds * probe.frameRate).rounded(.down))))
         setCurrent(frame, loadImage: false)
     }
 
@@ -1362,12 +1556,12 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         setCurrent(totalFrames - 1, loadImage: false)
     }
 
-    private func playbackFailed() {
-        player.pause()
+    private func playbackFailed(_ message: String) {
+        player?.pause()
         isPlaying = false
         updatePlayPauseAppearance()
         preview.showCurrentStill()
-        status.stringValue = player.currentItem?.error?.localizedDescription ?? "This source could not be played."
+        status.stringValue = message
     }
 
     private func updatePlayPauseAppearance() {
@@ -1378,21 +1572,14 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
 
     func pausePlayback() {
         guard isPlaying else { return }
-        player.pause()
+        player?.pause()
         isPlaying = false
         updatePlayPauseAppearance()
     }
 
     func stopPlayback() {
-        player.pause()
-        if let timeObserver {
-            player.removeTimeObserver(timeObserver)
-            self.timeObserver = nil
-        }
-        if let endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
-            self.endObserver = nil
-        }
+        player?.stop()
+        player = nil
     }
 
     private func timestamp(_ frame: Int) -> String {
