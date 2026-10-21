@@ -1220,16 +1220,21 @@ private final class MpvOpenGLView: NSOpenGLView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        openGLContext?.makeCurrentContext()
+        let backing = convertToBacking(bounds).size
+        let width = Int32(max(1, backing.width))
+        let height = Int32(max(1, backing.height))
+        glViewport(0, 0, width, height)
+        glClearColor(0, 0, 0, 1)
+        glClear(GLbitfield(GL_COLOR_BUFFER_BIT))
         guard let mpvRenderContext else {
-            glClearColor(0, 0, 0, 1)
-            glClear(GLbitfield(GL_COLOR_BUFFER_BIT))
             openGLContext?.flushBuffer()
             return
         }
-        openGLContext?.makeCurrentContext()
-        let backing = convertToBacking(bounds).size
-        var framebuffer = mpv_opengl_fbo(fbo: 0, w: Int32(max(1, backing.width)),
-                                         h: Int32(max(1, backing.height)), internal_format: 0)
+        var boundFramebuffer: GLint = 0
+        glGetIntegerv(GLenum(GL_FRAMEBUFFER_BINDING), &boundFramebuffer)
+        var framebuffer = mpv_opengl_fbo(fbo: Int32(boundFramebuffer), w: width,
+                                         h: height, internal_format: 0)
         var flip: Int32 = 1
         withUnsafeMutablePointer(to: &framebuffer) { framebufferPointer in
             withUnsafeMutablePointer(to: &flip) { flipPointer in
@@ -1244,6 +1249,12 @@ private final class MpvOpenGLView: NSOpenGLView {
             }
         }
         openGLContext?.flushBuffer()
+    }
+
+    override func reshape() {
+        super.reshape()
+        openGLContext?.update()
+        needsDisplay = true
     }
 
     func tearDown() {
@@ -1266,6 +1277,8 @@ private final class ClipPlaybackView: NSView {
         videoView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(videoView)
         stillImage.imageScaling = .scaleProportionallyUpOrDown
+        stillImage.wantsLayer = true
+        stillImage.layer?.backgroundColor = NSColor.black.cgColor
         stillImage.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stillImage)
         NSLayoutConstraint.activate([
@@ -1287,14 +1300,18 @@ private final class ClipPlaybackView: NSView {
 
     func showStill(_ image: NSImage?) {
         stillImage.image = image
+        videoView.isHidden = true
         stillImage.isHidden = false
     }
 
     func showPlayer() {
         stillImage.isHidden = true
+        videoView.isHidden = false
+        videoView.needsDisplay = true
     }
 
     func showCurrentStill() {
+        videoView.isHidden = true
         stillImage.isHidden = false
     }
 }
@@ -1427,6 +1444,8 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
     let inLabel = NSTextField(labelWithString: "")
     let outLabel = NSTextField(labelWithString: "")
     let status = NSTextField(labelWithString: "")
+    private weak var setInButton: NSButton?
+    private weak var setOutButton: NSButton?
     let totalFrames: Int
     private(set) var inFrame: Int
     private(set) var outFrame: Int
@@ -1434,6 +1453,8 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
     private var generation = 0
     private var player: MpvClipPlayer?
     private var isPlaying = false
+    private var inPointWasSet: Bool
+    private var outPointWasSet: Bool
 
     init(source: URL, probe: VideoProbe, initial: VideoClipRange?) {
         self.source = source
@@ -1443,6 +1464,8 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
         self.inFrame = max(0, min((initial?.startFrame ?? 0), totalFrames - 1))
         self.outFrame = max(self.inFrame, min((initial.map { $0.endFrameExclusive - 1 } ?? totalFrames - 1), totalFrames - 1))
         self.currentFrameIndex = self.inFrame
+        self.inPointWasSet = initial != nil
+        self.outPointWasSet = initial != nil
         self.timeline = ClipTimelineView(totalFrames: totalFrames)
         super.init()
         do {
@@ -1501,17 +1524,36 @@ private final class ClipEditorController: NSObject, NSTextFieldDelegate {
     @objc func setInPoint() {
         commitFrameField()
         inFrame = min(currentFrame, outFrame)
+        inPointWasSet = true
+        updatePointButtonAppearance()
         updateLabels()
     }
     @objc func setOutPoint() {
         commitFrameField()
         outFrame = max(currentFrame, inFrame)
+        outPointWasSet = true
+        updatePointButtonAppearance()
         updateLabels()
     }
     @objc func resetRange() {
         pausePlayback()
         inFrame = 0; outFrame = totalFrames - 1
+        inPointWasSet = false; outPointWasSet = false
+        updatePointButtonAppearance()
         setCurrent(0)
+    }
+
+    func connectPointButtons(setIn: NSButton, setOut: NSButton) {
+        setInButton = setIn
+        setOutButton = setOut
+        updatePointButtonAppearance()
+    }
+
+    private func updatePointButtonAppearance() {
+        setInButton?.bezelColor = inPointWasSet ? .systemBlue : nil
+        setOutButton?.bezelColor = outPointWasSet ? .systemBlue : nil
+        setInButton?.contentTintColor = inPointWasSet ? .white : nil
+        setOutButton?.contentTintColor = outPointWasSet ? .white : nil
     }
     func controlTextDidEndEditing(_ notification: Notification) {
         commitFrameField()
@@ -2274,6 +2316,7 @@ enum VideoCompatibility {
         jumpOut.toolTip = "Move to the Out frame"
         jumpOut.widthAnchor.constraint(equalToConstant: 30).isActive = true
         let reset = NSButton(title: "Reset", target: controller, action: #selector(ClipEditorController.resetRange))
+        controller.connectPointButtons(setIn: setIn, setOut: setOut)
         let points = NSStackView(views: [setIn, jumpIn, controller.inLabel,
                                          setOut, jumpOut, controller.outLabel, reset])
         points.orientation = .horizontal; points.alignment = .centerY; points.spacing = 12
