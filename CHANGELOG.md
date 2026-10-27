@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3 - 2026-10-27
+
+- Added automatic disc-readiness handling that primes troublesome mixed-mode CDs and scans them as soon as macOS publishes them.
+- Fixed MP3 extraction and added ALAC and Opus output, with expanded bitrate choices for compressed formats.
+- Added track metadata and embedded cover artwork to supported extracted formats when MusicBrainz metadata is selected.
+- Improved bulk extraction performance for audio tracks and data files.
+
 ## 3.2 - 2026-10-21
 
 - Added bundled libmpv playback and direct In/Out-point jump controls to the frame-accurate Adjust Clip editor, including MPEG-2/AC-3 MKV support without external software.

@@ -3,6 +3,7 @@ import AppKit
 import AVFoundation
 import Foundation
 import Darwin
+import DiscPrimer
 import Libmpv
 import OpenGL.GL
 import UniformTypeIdentifiers
@@ -229,8 +230,11 @@ enum CommandRunner {
 
 enum DiscScanner {
     static func scan() throws -> DiscSnapshot {
-        let status = try CommandRunner.run("/usr/bin/drutil", ["status"])
-        let toc = try CommandRunner.run("/usr/bin/drutil", ["toc"])
+        // Unlocks hidden pre-gap audio on drives that cannot read it until asked
+        // about Track 1, so macOS finishes examining the disc and drutil answers.
+        _ = DiscPrimerPrimeInsertedDiscs()
+        let status = try runDrutil(["status"])
+        let toc = try runDrutil(["toc"])
         guard let device = firstMatch(#"Name:\s*(/dev/disk\d+)"#, in: status, group: 1) else {
             throw ExtractorError.noDisc
         }
@@ -238,7 +242,7 @@ enum DiscScanner {
         let info = (try? CommandRunner.run("/usr/sbin/diskutil", ["info", device])) ?? ""
         let volume = firstMatch(#"(?m)^\s*Volume Name:\s*(.+?)\s*$"#, in: info, group: 1) ?? "Enhanced CD"
         let tracks = try parseTOC(toc)
-        let cdTextOutput = (try? CommandRunner.run("/usr/bin/drutil", ["cdtext"])) ?? ""
+        let cdTextOutput = (try? runDrutil(["cdtext"])) ?? ""
         let cdText = parseCDText(cdTextOutput)
         let firstAudio = tracks.first(where: \.isAudio)
         let hiddenTrack = firstAudio.flatMap { first -> CDTrack? in
@@ -250,6 +254,16 @@ enum DiscScanner {
         }
         return DiscSnapshot(device: device, driveName: vendor, volumeName: volume,
                             tracks: tracks, hiddenTrack: hiddenTrack, cdText: cdText)
+    }
+
+    /// drutil can be slow to answer while macOS is still settling a newly
+    /// readable disc, so it gets a longer timeout and one more attempt.
+    private static func runDrutil(_ arguments: [String]) throws -> String {
+        do {
+            return try CommandRunner.run("/usr/bin/drutil", arguments, timeout: 30)
+        } catch ExtractorError.commandFailed(let message) where message.contains("did not answer") {
+            return try CommandRunner.run("/usr/bin/drutil", arguments, timeout: 30)
+        }
     }
 
     private static func parseCDText(_ text: String) -> CDTextMetadata? {
@@ -335,12 +349,26 @@ enum DiscScanner {
 
 protocol ISOBlockReader: AnyObject {
     func dataSector(lba: Int) throws -> Data
+    /// The 2048-byte user data of consecutive sectors, concatenated.
+    func dataSectors(lba: Int, count: Int) throws -> Data
     func fileData(extent: Int, size: Int, progress: ((Int) -> Void)?) throws -> Data
+}
+
+extension ISOBlockReader {
+    func dataSectors(lba: Int, count: Int) throws -> Data {
+        var result = Data(); result.reserveCapacity(count * 2048)
+        for index in 0..<count { result.append(try dataSector(lba: lba + index)) }
+        return result
+    }
 }
 
 final class RawCDReader: ISOBlockReader {
     let handle: FileHandle
     let sectorSize: UInt64 = 2352
+    /// Sectors requested from the drive at once. One-sector requests leave the
+    /// drive idle between round trips; large requests let it stream at speed.
+    static let sectorsPerRead = 128
+    private let buffer: UnsafeMutableRawPointer
 
     init(device: String) throws {
         let rawDevice = device.replacingOccurrences(of: "/dev/disk", with: "/dev/rdisk")
@@ -357,64 +385,91 @@ final class RawCDReader: ISOBlockReader {
                           userInfo: [NSLocalizedDescriptionKey: "The raw CD device could not be opened."])
         }
         handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        // Page-aligned so the kernel can transfer straight into it.
+        var aligned: UnsafeMutableRawPointer?
+        guard posix_memalign(&aligned, Int(getpagesize()), Self.sectorsPerRead * 2352) == 0, let aligned else {
+            throw ExtractorError.shortRead(0)
+        }
+        buffer = aligned
     }
 
-    deinit { try? handle.close() }
+    deinit {
+        try? handle.close()
+        free(buffer)
+    }
+
+    /// One read request. Returns nil if the device rejects it.
+    private func readRequest(lba: Int, count: Int) -> Data? {
+        let length = count * Int(sectorSize)
+        let got = pread(handle.fileDescriptor, buffer, length, off_t(lba) * off_t(sectorSize))
+        return got == length ? Data(bytes: buffer, count: length) : nil
+    }
 
     func rawSector(lba: Int) throws -> Data {
-        try handle.seek(toOffset: UInt64(lba) * sectorSize)
-        guard let data = try handle.read(upToCount: Int(sectorSize)), data.count == Int(sectorSize) else {
-            throw ExtractorError.shortRead(lba)
-        }
-        return data
+        try rawSectors(lba: lba, count: 1)
     }
 
     func rawSectors(lba: Int, count: Int) throws -> Data {
         guard count > 0 else { return Data() }
-        try handle.seek(toOffset: UInt64(lba) * sectorSize)
-        let expected = count * Int(sectorSize)
-        var data = Data(); data.reserveCapacity(expected)
-        // Optical raw devices commonly require each read to be exactly one
-        // 2352-byte CD sector. Keep the handle positioned sequentially so a
-        // block incurs one seek, but never request an unsupported large read.
-        for sectorOffset in 0..<count {
-            guard let part = try handle.read(upToCount: Int(sectorSize)),
-                  part.count == Int(sectorSize) else {
-                throw ExtractorError.shortRead(lba + sectorOffset)
+        var data = Data(); data.reserveCapacity(count * Int(sectorSize))
+        var offset = 0
+        while offset < count {
+            let requestCount = min(Self.sectorsPerRead, count - offset)
+            if let block = readRequest(lba: lba + offset, count: requestCount) {
+                data.append(block)
+            } else {
+                // macOS rejects some multi-sector requests on raw CD devices
+                // for certain position and length combinations, so a rejected
+                // request is read again one sector at a time.
+                for index in 0..<requestCount {
+                    guard let sector = readRequest(lba: lba + offset + index, count: 1) else {
+                        throw ExtractorError.shortRead(lba + offset + index)
+                    }
+                    data.append(sector)
+                }
             }
-            data.append(part)
+            offset += requestCount
         }
         return data
     }
 
-    func dataSector(lba: Int) throws -> Data {
-        let raw = try rawSector(lba: lba)
+    private static func userData(from raw: Data, lba: Int) throws -> Data {
         guard raw.count == 2352 else { throw ExtractorError.shortRead(lba) }
-        switch raw[15] {
+        switch raw[raw.startIndex + 15] {
         case 1:
-            return raw.subdata(in: 16..<(16 + 2048))
+            return raw.subdata(in: (raw.startIndex + 16)..<(raw.startIndex + 16 + 2048))
         case 2:
-            if raw[18] & 0x20 != 0 { throw ExtractorError.mode2Form2 }
-            return raw.subdata(in: 24..<(24 + 2048))
+            if raw[raw.startIndex + 18] & 0x20 != 0 { throw ExtractorError.mode2Form2 }
+            return raw.subdata(in: (raw.startIndex + 24)..<(raw.startIndex + 24 + 2048))
         default:
-            throw ExtractorError.unsupportedSectorMode(raw[15])
+            throw ExtractorError.unsupportedSectorMode(raw[raw.startIndex + 15])
         }
+    }
+
+    func dataSector(lba: Int) throws -> Data {
+        try Self.userData(from: try rawSector(lba: lba), lba: lba)
+    }
+
+    func dataSectors(lba: Int, count: Int) throws -> Data {
+        let raw = try rawSectors(lba: lba, count: count)
+        var result = Data(); result.reserveCapacity(count * 2048)
+        for index in 0..<count {
+            let start = index * Int(sectorSize)
+            result.append(try Self.userData(from: raw.subdata(in: start..<(start + Int(sectorSize))), lba: lba + index))
+        }
+        return result
     }
 
     func fileData(extent: Int, size: Int, progress: ((Int) -> Void)? = nil) throws -> Data {
         var result = Data()
         result.reserveCapacity(size)
-        var remaining = size
         var lba = extent
-        var completed = 0
-        while remaining > 0 {
-            let sector = try dataSector(lba: lba)
-            let count = min(remaining, 2048)
-            result.append(sector.prefix(count))
-            remaining -= count
-            completed += count
-            progress?(completed)
-            lba += 1
+        while result.count < size {
+            let sectors = min(Self.sectorsPerRead, (size - result.count + 2047) / 2048)
+            let block = try dataSectors(lba: lba, count: sectors)
+            result.append(block.prefix(size - result.count))
+            lba += sectors
+            progress?(result.count)
         }
         return result
     }
@@ -1847,7 +1902,7 @@ enum VideoCompatibility {
 
             let title = NSTextField(labelWithString: fileName)
             title.font = .boldSystemFont(ofSize: 18); root.addArrangedSubview(title)
-            if probe.needsConversion {
+            if canSaveOriginal && probe.needsConversion {
                 let warning = NSTextField(wrappingLabelWithString:
                     "This file uses codecs that may not play on your Mac. Converting it to H.264/AAC is recommended for reliable playback on current Macs. You can keep the original, create one or more converted copies, or do both.")
                 warning.textColor = .systemRed
@@ -2738,14 +2793,14 @@ final class ISO9660Reader {
             return try disc.fileData(extent: discExtent, size: size, progress: progress)
         }
         var result = Data(); result.reserveCapacity(size)
-        var remaining = size; var lba = discExtent; var completed = 0
-        while remaining > 0 {
+        var lba = discExtent
+        while result.count < size {
             if let cancellationTicket { try OperationCancellation.shared.check(cancellationTicket) }
-            let sector = try disc.dataSector(lba: lba)
-            let count = min(remaining, 2048)
-            result.append(sector.prefix(count))
-            remaining -= count; completed += count; lba += 1
-            progress?(completed)
+            let sectors = min(RawCDReader.sectorsPerRead, (size - result.count + 2047) / 2048)
+            let block = try disc.dataSectors(lba: lba, count: sectors)
+            result.append(block.prefix(size - result.count))
+            lba += sectors
+            progress?(result.count)
         }
         return result
     }
@@ -2784,20 +2839,94 @@ final class ISO9660Reader {
     }
 }
 
+/// Descriptive tags written into extracted audio files.
+struct AudioTags {
+    var title: String
+    var artist: String
+    var album: String
+    var trackNumber: Int?
+    var trackTotal: Int
+    var date: String
+    /// Front cover image file to embed, if one was found.
+    var coverArt: URL?
+
+    private var trackField: String? {
+        guard let trackNumber, trackNumber > 0 else { return nil }
+        return trackTotal > 0 ? "\(trackNumber)/\(trackTotal)" : "\(trackNumber)"
+    }
+
+    private static func present(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// LAME writes ID3v2 tags and the APIC cover frame itself.
+    var lameArguments: [String] {
+        var arguments = ["--add-id3v2", "--id3v2-utf16"]
+        if Self.present(title) { arguments += ["--tt", title] }
+        if Self.present(artist) { arguments += ["--ta", artist, "--tv", "TPE2=\(artist)"] }
+        if Self.present(album) { arguments += ["--tl", album] }
+        if let year = date.prefix(4).allSatisfy(\.isNumber) && date.count >= 4 ? String(date.prefix(4)) : nil {
+            arguments += ["--ty", year]
+        }
+        if let trackField { arguments += ["--tn", trackField] }
+        if let coverArt { arguments += ["--ti", coverArt.path] }
+        return arguments
+    }
+
+    /// opusenc writes Vorbis comments and a METADATA_BLOCK_PICTURE itself.
+    var opusencArguments: [String] {
+        var arguments: [String] = []
+        if Self.present(title) { arguments += ["--title", title] }
+        if Self.present(artist) { arguments += ["--artist", artist, "--comment", "ALBUMARTIST=\(artist)"] }
+        if Self.present(album) { arguments += ["--album", album] }
+        if Self.present(date) { arguments += ["--date", date] }
+        if let trackNumber, trackNumber > 0 {
+            arguments += ["--tracknumber", "\(trackNumber)"]
+            if trackTotal > 0 { arguments += ["--comment", "TRACKTOTAL=\(trackTotal)"] }
+        }
+        if let coverArt { arguments += ["--picture", coverArt.path] }
+        return arguments
+    }
+
+    var ffmpegArguments: [String] {
+        var values: [(String, String)] = [("title", title), ("artist", artist), ("album_artist", artist),
+                                          ("album", album), ("date", date)]
+        if let trackNumber, trackNumber > 0 {
+            values.append(("track", trackTotal > 0 ? "\(trackNumber)/\(trackTotal)" : "\(trackNumber)"))
+        }
+        return values.filter { !$0.1.trimmingCharacters(in: .whitespaces).isEmpty }
+            .flatMap { ["-metadata", "\($0.0)=\($0.1)"] }
+    }
+}
+
 enum AudioOutputFormat: String, CaseIterable, Identifiable {
-    case wav = "WAV (lossless)"
-    case aiff = "AIFF (lossless)"
-    case flac = "FLAC (lossless)"
-    case mp3 = "MP3 (320 kbps)"
-    case aac = "AAC (320 kbps)"
+    case wav = "WAV"
+    case aiff = "AIFF"
+    case flac = "FLAC"
+    case alac = "ALAC"
+    case mp3 = "MP3"
+    case aac = "AAC"
+    case opus = "Opus"
 
     var id: String { rawValue }
+
+    /// Selectable bitrates in kbps, highest first; empty for lossless formats.
+    var bitrates: [Int] {
+        switch self {
+        case .mp3: return [320, 256, 224, 192, 160, 128]
+        case .aac: return [320, 256, 192, 160, 128]
+        case .opus: return [320, 256, 192, 160, 128, 96]
+        case .wav, .aiff, .flac, .alac: return []
+        }
+    }
     var fileExtension: String {
         switch self {
         case .wav: return "wav"
         case .aiff: return "aiff"
         case .flac: return "flac"
+        case .alac: return "m4a"
         case .mp3: return "mp3"
+        case .opus: return "opus"
         case .aac: return "m4a"
         }
     }
@@ -2810,14 +2939,14 @@ struct AudioExtractionReport {
 
 enum AudioExtractor {
     private static let bytesPerSector = 2352
-    private static let sectorsPerChunk = 27
+    // Each block is read twice and compared; one fast request per pass.
+    private static let sectorsPerChunk = RawCDReader.sectorsPerRead
 
     static func extract(track: CDTrack, disc: RawCDReader, to destination: URL,
-                        format: AudioOutputFormat, cancellationTicket: Int,
+                        format: AudioOutputFormat, bitrate: Int, tags: AudioTags, cancellationTicket: Int,
                         progress: (Double) -> Void) throws -> AudioExtractionReport {
-        let temporaryWAV = format == .wav
-            ? destination
-            : destination.deletingLastPathComponent().appendingPathComponent(".CD Explorer Track \(track.number) \(UUID().uuidString).wav")
+        let temporaryWAV = destination.deletingLastPathComponent()
+            .appendingPathComponent(".CD Explorer Track \(track.number) \(UUID().uuidString).wav")
         var completed = false
         defer {
             if temporaryWAV != destination { try? FileManager.default.removeItem(at: temporaryWAV) }
@@ -2868,33 +2997,67 @@ enum AudioExtractor {
                 try output.write(contentsOf: verified)
             }
             offset += count
-            progress(Double(offset) / Double(max(1, track.sectorCount)) * (format == .wav ? 1 : 0.9))
+            progress(Double(offset) / Double(max(1, track.sectorCount)) * 0.9)
         }
         try output.synchronize()
         try output.close()
 
-        if format != .wav {
-            try OperationCancellation.shared.check(cancellationTicket)
-            guard let ffmpeg = BundledMediaTools.ffmpegExecutable else {
+        try OperationCancellation.shared.check(cancellationTicket)
+        let timeout = max(120, Double(track.sectorCount) / 75 * 2 + 60)
+        switch format {
+        case .mp3:
+            guard let lame = BundledMediaTools.lameExecutable else {
+                throw ExtractorError.commandFailed("The bundled MP3 encoder is missing. Rebuild CD Explorer with Scripts/build_audio_encoders.sh.")
+            }
+            _ = try CommandRunner.run(lame, ["--quiet", "--nohist", "-b", "\(bitrate)", "-q", "0"] + tags.lameArguments
+                                      + [temporaryWAV.path, destination.path], timeout: timeout)
+        case .opus:
+            guard let opusenc = BundledMediaTools.opusencExecutable else {
+                throw ExtractorError.commandFailed("The bundled Opus encoder is missing. Rebuild CD Explorer with Scripts/build_audio_encoders.sh.")
+            }
+            _ = try CommandRunner.run(opusenc, ["--quiet", "--bitrate", "\(bitrate)"] + tags.opusencArguments
+                                      + [temporaryWAV.path, destination.path], timeout: timeout)
+        default:
+            if let ffmpeg = BundledMediaTools.ffmpegExecutable {
+                // FFmpeg converts the verified WAV and writes the tags; WAV is copied
+                // unchanged. Every format here except WAV can carry cover art.
+                var arguments = ["-y", "-hide_banner", "-loglevel", "error", "-i", temporaryWAV.path]
+                if let cover = tags.coverArt, format != .wav {
+                    arguments += ["-i", cover.path, "-map", "0:a", "-map", "1:v", "-c:v", "copy",
+                                  "-disposition:v", "attached_pic"]
+                }
+                arguments += ["-map_metadata", "-1"] + tags.ffmpegArguments
+                switch format {
+                case .aiff: arguments += ["-c:a", "pcm_s16be", "-write_id3v2", "1"]
+                case .flac: arguments += ["-c:a", "flac", "-compression_level", "8"]
+                case .alac: arguments += ["-c:a", "alac"]
+                case .aac: arguments += ["-c:a", "aac_at", "-b:a", "\(bitrate)k"]
+                default: arguments += ["-c:a", "copy"]
+                }
+                arguments.append(destination.path)
+                _ = try CommandRunner.run(ffmpeg, arguments, timeout: timeout)
+            } else if format == .wav {
+                try FileManager.default.moveItem(at: temporaryWAV, to: destination)
+            } else {
                 throw ExtractorError.commandFailed("FFmpeg is required for \(format.rawValue) output. WAV extraction works without it.")
             }
-            var arguments = ["-y", "-hide_banner", "-loglevel", "error", "-i", temporaryWAV.path, "-map_metadata", "-1"]
-            switch format {
-            case .wav: break
-            case .aiff: arguments += ["-c:a", "pcm_s16be"]
-            case .flac: arguments += ["-c:a", "flac", "-compression_level", "8"]
-            case .mp3: arguments += ["-c:a", "libmp3lame", "-b:a", "320k"]
-            case .aac: arguments += ["-c:a", "aac", "-b:a", "320k"]
-            }
-            arguments.append(destination.path)
-            _ = try CommandRunner.run(ffmpeg, arguments,
-                                      timeout: max(120, Double(track.sectorCount) / 75 * 2 + 60))
-            progress(1)
         }
+        progress(1)
 
-        let info = try CommandRunner.run("/usr/bin/afinfo", [destination.path], timeout: 30)
-        guard info.contains("Data format:") else {
-            throw ExtractorError.commandFailed("The extracted audio file could not be validated by macOS.")
+        if format == .opus {
+            // macOS cannot open Ogg Opus files, so FFprobe confirms the stream instead.
+            let codec = BundledMediaTools.ffprobeExecutable.flatMap {
+                try? CommandRunner.run($0, ["-v", "error", "-select_streams", "a:0", "-show_entries",
+                                            "stream=codec_name", "-of", "csv=p=0", destination.path], timeout: 30)
+            }
+            guard codec?.trimmingCharacters(in: .whitespacesAndNewlines) == "opus" else {
+                throw ExtractorError.commandFailed("The extracted Opus file could not be validated.")
+            }
+        } else {
+            let info = try CommandRunner.run("/usr/bin/afinfo", [destination.path], timeout: 30)
+            guard info.contains("Data format:") else {
+                throw ExtractorError.commandFailed("The extracted audio file could not be validated by macOS.")
+            }
         }
         completed = true
         return report
@@ -2921,8 +3084,7 @@ enum AudioSilenceAnalyzer {
     private static let silencePeak = 104
     private static let minimumGapSectors = 150
     private static let minimumPieceSectors = 75 * 20
-    // Read in manageable blocks, testing every sector. RawCDReader performs one
-    // seek per block but uses the one-sector reads required by optical devices.
+    // Read in manageable blocks, testing every sector.
     private static let readChunkSectors = 75 * 20
 
     static func suggestions(for sources: [CDTrack], disc: RawCDReader, cancellationTicket: Int,
@@ -3118,11 +3280,45 @@ enum BundledMediaTools {
     static var ffprobeExecutable: String? {
         ffprobeCandidates.first(where: FileManager.default.isExecutableFile(atPath:))
     }
+
+    static var lameExecutable: String? {
+        bundledToolCandidates(named: "lame").first(where: FileManager.default.isExecutableFile(atPath:))
+    }
+
+    static var opusencExecutable: String? {
+        bundledToolCandidates(named: "opusenc").first(where: FileManager.default.isExecutableFile(atPath:))
+    }
+}
+
+/// Front covers from the Cover Art Archive, which pairs with MusicBrainz releases.
+enum CoverArtArchive {
+    static func frontCover(releaseID: String, completion: @escaping (Data?) -> Void) {
+        // The 1200-pixel rendition keeps embedded art sharp without bloating each track.
+        let renditions = ["front-1200", "front-500"]
+        func attempt(_ index: Int) {
+            guard index < renditions.count,
+                  let url = URL(string: "https://coverartarchive.org/release/\(releaseID)/\(renditions[index])") else {
+                completion(nil); return
+            }
+            var request = URLRequest(url: url, timeoutInterval: 20)
+            request.setValue("CDExplorer/3.2 (https://github.com/michaelsft/CD-Explorer)", forHTTPHeaderField: "User-Agent")
+            URLSession.shared.dataTask(with: request) { data, response, _ in
+                if (response as? HTTPURLResponse)?.statusCode == 200, let data, NSImage(data: data) != nil {
+                    completion(data)
+                } else {
+                    attempt(index + 1)
+                }
+            }.resume()
+        }
+        attempt(0)
+    }
 }
 struct CDMetadata: Identifiable, Hashable {
     let id: String
     let artist: String
     let release: String
+    let releaseID: String
+    let date: String
     let edition: String
     let trackTitles: [String]
 }
@@ -3234,6 +3430,8 @@ enum MusicBrainzLookup {
                 if media.count > 1 { details.append("Disc \(mediumPosition)") }
                 choices.append(CDMetadata(id: choiceID, artist: artist,
                     release: release["title"] as? String ?? "Unknown release",
+                    releaseID: releaseID,
+                    date: release["date"] as? String ?? "",
                     edition: details.joined(separator: " • "), trackTitles: titles))
             }
         }
@@ -3254,11 +3452,42 @@ final class AppModel: ObservableObject {
     @Published var filterDataVideos = false
     @Published var filterDataAudio = false
     @Published var filterDataImages = false
-    @Published var audioFormat: AudioOutputFormat = .wav
-    @Published var status = "Insert a CD, then click Scan CD."
+    @Published var audioFormat: AudioOutputFormat = AppModel.savedAudioFormat() {
+        didSet {
+            UserDefaults.standard.set(String(describing: audioFormat), forKey: "audioFormat")
+            audioBitrate = AppModel.savedBitrate(for: audioFormat)
+        }
+    }
+    /// Bitrate in kbps for lossy formats, remembered separately for each format.
+    @Published var audioBitrate: Int = AppModel.savedBitrate(for: AppModel.savedAudioFormat()) {
+        didSet {
+            guard audioFormat.bitrates.contains(audioBitrate) else { return }
+            UserDefaults.standard.set(audioBitrate, forKey: "audioBitrate.\(String(describing: audioFormat))")
+        }
+    }
+
+    private static func savedBitrate(for format: AudioOutputFormat) -> Int {
+        let saved = UserDefaults.standard.integer(forKey: "audioBitrate.\(String(describing: format))")
+        return format.bitrates.contains(saved) ? saved : (format.bitrates.first ?? 0)
+    }
+
+    /// The format chosen last time, stored by case name so relabelling a
+    /// format does not lose the choice.
+    private static func savedAudioFormat() -> AudioOutputFormat {
+        let saved = UserDefaults.standard.string(forKey: "audioFormat")
+        return AudioOutputFormat.allCases.first { String(describing: $0) == saved } ?? .wav
+    }
+    @Published var status = "Insert a CD to read it."
     @Published var details = ""
     @Published var progress = 0.0
     @Published var busy = false
+    /// True once a disc has been inserted and macOS has finished examining it.
+    @Published var discReady = false
+    private var discReadySince: Date?
+    private var discAbsentSince: Date?
+    /// The disc that was last scanned automatically, so a disc is read once on
+    /// arrival and not again when macOS briefly republishes it.
+    private var autoScannedDiscIdentity: UInt64 = 0
     @Published var showCompletion = false
     @Published var completionMessage = ""
     @Published var showError = false
@@ -3269,6 +3498,12 @@ final class AppModel: ObservableObject {
     @Published var trackNames: [UUID: String] = [:]
     @Published var artistName = ""
     @Published var releaseTitle = ""
+    /// Release date of the chosen MusicBrainz edition, written into audio tags.
+    private var releaseDate = ""
+    /// Front cover of the chosen MusicBrainz edition, shown in the window and embedded in audio files.
+    @Published var coverArt: Data?
+    private var metadataReleaseID = ""
+    var coverImage: NSImage? { coverArt.flatMap(NSImage.init(data:)) }
     @Published var metadataOptions: [CDMetadata] = []
     @Published var showMetadataChoices = false
     @Published var isDiscImage = false
@@ -3420,15 +3655,7 @@ final class AppModel: ObservableObject {
             details = "\(snapshot.volumeName) • Disc Image"
             return
         }
-        let hasData = snapshot.tracks.contains { !$0.isAudio }
-        let hasHidden = snapshot.hiddenTrack != nil || splitTracks.contains { $0.name.contains("Hidden") }
-        let type: String
-        if hasData && hasHidden { type = "Enhanced CD with Hidden Audio Tracks" }
-        else if hasData { type = "Enhanced CD" }
-        else if hasHidden { type = "Audio CD with Hidden Tracks" }
-        else { type = "Audio CD" }
-        let identity = [artistName, releaseTitle].filter { !$0.isEmpty }.joined(separator: " - ")
-        details = identity.isEmpty ? type : "\(identity) • \(type)"
+        details = [artistName, releaseTitle].filter { !$0.isEmpty }.joined(separator: " - ")
     }
 
     private func lookupMetadata(for disc: DiscSnapshot) {
@@ -3458,6 +3685,17 @@ final class AppModel: ObservableObject {
     func applyMetadata(_ metadata: CDMetadata) {
         artistName = metadata.artist
         releaseTitle = metadata.release
+        releaseDate = metadata.date
+        coverArt = nil
+        let releaseID = metadata.releaseID
+        CoverArtArchive.frontCover(releaseID: releaseID) { data in
+            DispatchQueue.main.async {
+                // Ignore a cover that arrives after a different disc or edition was chosen.
+                guard self.metadataReleaseID == releaseID else { return }
+                self.coverArt = data
+            }
+        }
+        metadataReleaseID = releaseID
         let audio = tracks.filter(\.isAudio)
         for (track, title) in zip(audio, metadata.trackTitles) { trackNames[track.id] = title }
         metadataOptions = []
@@ -3535,8 +3773,45 @@ final class AppModel: ObservableObject {
             || !selectedDataFiles.isEmpty
     }
 
+    /// Polled every second. A disc counts as ready after macOS has finished
+    /// examining it for two consecutive seconds, so drutil answers promptly.
+    func refreshDiscReadiness() {
+        let state = DiscPrimerInsertedDiscState()
+        // Reading a disc makes macOS withdraw and republish it for a few seconds,
+        // so only a disc gone for ten seconds while idle counts as removed. A real
+        // reinsertion takes longer, because the drive spends about 20 seconds
+        // spinning the disc up.
+        if state == 0 {
+            let absent = discAbsentSince ?? Date()
+            discAbsentSince = absent
+            if !busy, Date().timeIntervalSince(absent) >= 10 { autoScannedDiscIdentity = 0 }
+        } else {
+            discAbsentSince = nil
+        }
+        guard state == 2 else {
+            discReadySince = nil
+            if discReady { discReady = false }
+            return
+        }
+        let since = discReadySince ?? Date()
+        discReadySince = since
+        let ready = Date().timeIntervalSince(since) >= 2
+        if discReady != ready { discReady = ready }
+        scanAutomaticallyIfNew()
+    }
+
+    /// Reads a newly inserted disc as soon as it is ready. An open disc image
+    /// is left alone, and Rescan CD remains available.
+    private func scanAutomaticallyIfNew() {
+        guard discReady, !busy, !isDiscImage else { return }
+        let identity = DiscPrimerInsertedDiscIdentity()
+        guard identity != 0, identity != autoScannedDiscIdentity else { return }
+        autoScannedDiscIdentity = identity
+        scan()
+    }
+
     func scan() {
-        guard !busy else { return }
+        guard !busy, discReady else { return }
         let cancellationTicket = OperationCancellation.shared.begin()
         audioPlayer.stop(); playingTrackID = nil
         busy = true; progress = 0; status = "Reading the disc table of contents…"
@@ -3581,7 +3856,8 @@ final class AppModel: ObservableObject {
                     } else {
                         self.artistName = ""; self.releaseTitle = ""
                     }
-                    self.metadataOptions = []; self.showMetadataChoices = false
+                    self.metadataOptions = []; self.showMetadataChoices = false; self.releaseDate = ""
+                    self.coverArt = nil; self.metadataReleaseID = ""
                     self.selected = []
                     self.selectedDataFiles = []
                     self.filterDataVideos = false
@@ -3661,7 +3937,8 @@ final class AppModel: ObservableObject {
                     self.isDiscImage = true
                     self.tracks = [track]; self.hiddenTrack = nil; self.splitTracks = []
                     self.trackNames = [:]; self.artistName = ""; self.releaseTitle = ""
-                    self.metadataOptions = []; self.showMetadataChoices = false
+                    self.metadataOptions = []; self.showMetadataChoices = false; self.releaseDate = ""
+                    self.coverArt = nil; self.metadataReleaseID = ""
                     self.selected = []; self.selectedDataFiles = []
                     self.filterDataVideos = false; self.filterDataAudio = false; self.filterDataImages = false
                     self.expandedDataTracks = [1]
@@ -3827,7 +4104,8 @@ final class AppModel: ObservableObject {
                     self.stopPlayback()
                     self.snapshot = nil; self.tracks = []; self.hiddenTrack = nil; self.splitTracks = []
                     self.trackNames = [:]; self.artistName = ""; self.releaseTitle = ""
-                    self.metadataOptions = []; self.showMetadataChoices = false
+                    self.metadataOptions = []; self.showMetadataChoices = false; self.releaseDate = ""
+                    self.coverArt = nil; self.metadataReleaseID = ""
                     self.selected = []; self.selectedDataFiles = []
                     self.expandedDataTracks = []; self.expandedDataFolders = []; self.dataFiles = []
                     self.details = ""; self.status = "Disc ejected."; self.busy = false
@@ -3882,10 +4160,21 @@ final class AppModel: ObservableObject {
                                    destination: URL, presentationWindow: NSWindow?, convertVideos: Bool) {
         let cancellationTicket = OperationCancellation.shared.begin()
         let format = audioFormat
+        let bitrate = audioBitrate
+        var albumTags = AudioTags(title: "", artist: artistName, album: releaseTitle, trackNumber: nil,
+                                  trackTotal: tracks.filter(\.isAudio).count, date: releaseDate)
+        if let coverArt {
+            let isPNG = coverArt.starts(with: [0x89, 0x50, 0x4E, 0x47])
+            let coverFile = FileManager.default.temporaryDirectory
+                .appendingPathComponent("CD Explorer Cover \(UUID().uuidString).\(isPNG ? "png" : "jpg")")
+            if (try? coverArt.write(to: coverFile)) != nil { albumTags.coverArt = coverFile }
+        }
+        let extractionTags = albumTags
         let imageURL = discImageURL
         busy = true; progress = 0; status = "Opening \(snapshot.device)…"
 
         DispatchQueue.global(qos: .userInitiated).async {
+            defer { if let cover = extractionTags.coverArt { try? FileManager.default.removeItem(at: cover) } }
             do {
                 try OperationCancellation.shared.check(cancellationTicket)
                 let reader = try Self.dataReader(imageURL: imageURL, device: snapshot.device)
@@ -3912,7 +4201,12 @@ final class AppModel: ObservableObject {
                     let target = self.uniqueFile(root.appendingPathComponent(filename))
                     let base = Double(completedItems) / Double(outputCount)
                     let scale = 1.0 / Double(outputCount)
+                    var tags = extractionTags
+                    tags.title = job.name
+                    // Hidden pre-gap audio and split pieces carry no track number of their own.
+                    tags.trackNumber = track.number > 0 && track.description != "suggested split audio" ? track.number : nil
                     _ = try AudioExtractor.extract(track: track, disc: disc, to: target, format: format,
+                                                   bitrate: bitrate, tags: tags,
                                                    cancellationTicket: cancellationTicket) { local in
                         DispatchQueue.main.async {
                             guard OperationCancellation.shared.isCurrent(cancellationTicket) else { return }
@@ -4046,7 +4340,6 @@ final class AppModel: ObservableObject {
                     if cancelledVideoChoices > 0 {
                         completion += "\nCancelled \(cancelledVideoChoices) video\(cancelledVideoChoices == 1 ? "" : "s")."
                     }
-                    if !audioJobs.isEmpty { completion += "\nAudio verified." }
                     self.completionMessage = completion
                     self.showCompletion = true
                     self.busy = false
@@ -4098,6 +4391,7 @@ final class AppModel: ObservableObject {
 
 struct EnhancedCDView: View {
     @StateObject private var model = AppModel()
+    private let discReadinessTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     @ViewBuilder
     private func dataRow(_ node: DataTreeNode) -> some View {
@@ -4203,13 +4497,15 @@ struct EnhancedCDView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable().frame(width: 42, height: 42)
+                Image(nsImage: model.coverImage ?? NSApp.applicationIconImage)
+                    .resizable().aspectRatio(contentMode: .fill).frame(width: 42, height: 42)
+                    .clipShape(RoundedRectangle(cornerRadius: model.coverImage == nil ? 0 : 4))
                 if !model.details.isEmpty {
-                    Text(model.details).foregroundStyle(.secondary).lineLimit(1)
+                    Text(model.details).font(.headline).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
-                Button("Scan CD") { model.scan() }.disabled(model.busy)
+                Button("Rescan CD") { model.scan() }
+                    .disabled(model.busy || !model.discReady)
                 Button("Scan IMG/ISO") { model.scanImage() }.disabled(model.busy)
                 Button(model.isDiscImage ? "Close Image" : "Eject") { model.eject() }
                     .disabled(model.busy || model.tracks.isEmpty)
@@ -4283,7 +4579,7 @@ struct EnhancedCDView: View {
             Text(model.status).font(.callout).foregroundStyle(model.status.localizedCaseInsensitiveContains("error") ? .red : .secondary)
 
             HStack {
-                Button("Extract As Is") { model.extractAsIs() }
+                Button("Extract") { model.extractAsIs() }
                     .disabled(model.busy || !model.hasSelection)
                 Button("Extract Video & Convert") { model.extractVideoAndConvert() }
                     .disabled(model.busy || !model.hasSelectedVideo)
@@ -4292,14 +4588,23 @@ struct EnhancedCDView: View {
                 Button("Stop") { model.stopCurrentOperation() }
                     .disabled(!model.busy)
                 Spacer(minLength: 28)
-                Picker("Audio format", selection: $model.audioFormat) {
+                Text("Format")
+                Picker("Format", selection: $model.audioFormat) {
                     ForEach(AudioOutputFormat.allCases) { format in Text(format.rawValue).tag(format) }
                 }
-                .frame(width: 245)
+                .labelsHidden().fixedSize()
                 .disabled(model.busy)
+                Text("Bitrate").padding(.leading, 6)
+                Picker("Bitrate", selection: $model.audioBitrate) {
+                    if model.audioFormat.bitrates.isEmpty {
+                        Text("—").tag(model.audioBitrate)
+                    } else {
+                        ForEach(model.audioFormat.bitrates, id: \.self) { rate in Text("\(rate)").tag(rate) }
+                    }
+                }
+                .labelsHidden().fixedSize()
+                .disabled(model.busy || model.audioFormat.bitrates.isEmpty)
             }
-            Text("Audio is read twice and compared. Inconsistent sectors are retried; an unrecoverable sector stops extraction instead of being silently replaced.")
-                .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 4).padding(.top, 2).padding(.bottom, 10)
         .alert("Extraction Complete", isPresented: $model.showCompletion) {
@@ -4340,6 +4645,8 @@ struct EnhancedCDView: View {
             .frame(minWidth: 620, minHeight: 430)
             .interactiveDismissDisabled()
         }
+        .onAppear { model.refreshDiscReadiness() }
+        .onReceive(discReadinessTimer) { _ in model.refreshDiscReadiness() }
     }
 }
 
@@ -4352,6 +4659,12 @@ struct ContentView: View {
 }
 
 final class CDExplorerAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Ask each newly inserted disc's drive about Track 1 straight away, so
+        // discs with hidden pre-gap audio and a data session appear in seconds.
+        DiscPrimerStartWatching()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 

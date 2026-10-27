@@ -17,13 +17,15 @@ Commercial Enhanced CDs often contain music, videos, artwork and interactive fil
 ## Highlights
 
 - Lists audio tracks separately from data-session files.
+- Primes troublesome mixed-mode discs automatically and scans them as soon as macOS makes the media available.
 - Detects hidden track-one audio stored before the normal first track.
 - Analyses hidden pre-gaps and long final tracks for substantial audio separated by silence.
 - Previews audio directly from the disc with seeking and elapsed-time display.
 - Reads CD-Text and offers all compatible MusicBrainz matches rather than silently choosing one.
 - Keeps every track title editable.
 - Secure-reads audio twice, compares the results and retries inconsistent sectors.
-- Extracts WAV, AIFF, FLAC, 320 kbps MP3 or 320 kbps AAC.
+- Extracts WAV, AIFF, FLAC, ALAC, or MP3, AAC and Opus at a chosen bitrate up to 320 kbps, tagged with title, artist, album, date and track number.
+- Shows the chosen MusicBrainz release's front cover from the Cover Art Archive and embeds it in AIFF, FLAC, ALAC, MP3, AAC and Opus files.
 - Browses complete ISO 9660 and Joliet directory trees, expanded by default.
 - Filters data files by video, audio or image type.
 - Opens 2048-byte ISO and 2352-byte raw IMG images through the same interface as a physical disc.
@@ -36,7 +38,7 @@ Commercial Enhanced CDs often contain music, videos, artwork and interactive fil
 - Optionally replaces incorrect video colour metadata with Rec.709 limited-range tags for YouTube without applying a pixel-level colour conversion.
 - Detects interlacing and offers BWDIF deinterlacing with the detected field order.
 - Offers motion-compensated frame-rate conversion for low or unusual frame rates.
-- Includes FFmpeg, FFprobe and libmpv for both Apple silicon and Intel Macs.
+- Includes FFmpeg, FFprobe, libmpv, LAME and Opus tools for both Apple silicon and Intel Macs.
 
 ## Requirements
 
@@ -49,9 +51,9 @@ No Homebrew installation is required to run the app.
 
 ## Getting started
 
-1. Insert a CD and select **Scan CD**, or select **Scan IMG/ISO** to inspect a disc image.
+1. Insert a CD; CD Explorer reads it as soon as it is ready. Select **Rescan CD** to read it again, or **Scan IMG/ISO** to inspect a disc image.
 2. Select the audio tracks or data files you want.
-3. Choose **Extract As Is** for an unchanged copy, or **Extract Video & Convert** for video-processing options.
+3. Choose **Extract** for an unchanged copy, or **Extract Video & Convert** for video-processing options.
 4. Use **Analyse** when CD Explorer offers hidden-track separation.
 
 Nothing is selected automatically, so extraction only includes the items you explicitly choose.
@@ -71,16 +73,16 @@ The universal application is written to `build/CD Explorer.app`.
 To create the complete public-release set:
 
 ```bash
-zsh Scripts/build_release.sh 3.2
+zsh Scripts/build_release.sh 3.3
 ```
 
 The release builder creates:
 
-- `CD-Explorer-3.2.dmg`
-- `CD-Explorer-3.2-Third-Party-Source.tar.gz`
-- `SHA256SUMS-3.2.txt`
+- `CD-Explorer-3.3.dmg`
+- `CD-Explorer-3.3-Third-Party-Source.tar.gz`
+- `SHA256SUMS-3.3.txt`
 
-Upload all three files to the same GitHub Release. The repository tag supplies CD Explorer's own source and the pinned MPVKit package manifest; the separate source archive supplies the exact FFmpeg and x264 sources corresponding to the bundled executables.
+Upload all three files to the same GitHub Release. The repository tag supplies CD Explorer's own source and the pinned MPVKit package manifest; the separate source archive supplies the exact FFmpeg, x264, LAME and Opus-related sources corresponding to the bundled executables.
 
 ## macOS Gatekeeper
 

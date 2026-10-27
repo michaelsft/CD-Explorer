@@ -40,6 +40,19 @@ swift_bin_dir=$(/usr/bin/swift build --package-path "$project_dir" -c release \
 mkdir -p "$contents/Resources/Tools" "$contents/Resources/FFmpeg" "$contents/Resources/Open Source Licences"
 /bin/cp "$project_dir/BundledTools/ffmpeg" "$contents/Resources/Tools/ffmpeg"
 /bin/cp "$project_dir/BundledTools/ffprobe" "$contents/Resources/Tools/ffprobe"
+# MP3 (LAME) and Opus (opusenc) encoders, built by Scripts/build_audio_encoders.sh.
+for tool in lame opusenc; do
+  if [[ -x "$project_dir/BundledTools/$tool" ]]; then
+    /bin/cp "$project_dir/BundledTools/$tool" "$contents/Resources/Tools/$tool"
+  else
+    echo "Warning: BundledTools/$tool is missing; run Scripts/build_audio_encoders.sh for MP3 and Opus output." >&2
+  fi
+done
+for notice in COPYING.LAME COPYING.Opus; do
+  if [[ -f "$project_dir/BundledTools/$notice" ]]; then
+    /bin/cp "$project_dir/BundledTools/$notice" "$contents/Resources/Open Source Licences/$notice.txt"
+  fi
+done
 /bin/chmod 755 "$contents/Resources/Tools/ffmpeg" "$contents/Resources/Tools/ffprobe"
 /bin/cp "$project_dir/BundledTools/FFmpeg-NOTICE.txt" "$contents/Resources/FFmpeg/FFmpeg-NOTICE.txt"
 /bin/cp "$project_dir/BundledTools/COPYING.GPLv2" "$contents/Resources/FFmpeg/COPYING.GPLv2"
@@ -50,6 +63,11 @@ mkdir -p "$contents/Resources/Tools" "$contents/Resources/FFmpeg" "$contents/Res
 /bin/cp "$project_dir/ThirdParty/MPVKit-LICENSE.txt" "$contents/Resources/Open Source Licences/MPVKit LGPLv3.txt"
 /usr/bin/codesign --force --sign - "$contents/Resources/Tools/ffmpeg"
 /usr/bin/codesign --force --sign - "$contents/Resources/Tools/ffprobe"
+for tool in lame opusenc; do
+  if [[ -f "$contents/Resources/Tools/$tool" ]]; then
+    /usr/bin/codesign --force --sign - "$contents/Resources/Tools/$tool"
+  fi
+done
 /usr/bin/codesign --force --deep --sign - "$app_dir"
 
 echo "$app_dir"

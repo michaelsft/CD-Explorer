@@ -38,3 +38,21 @@ CD Explorer links the `MPVKit-GPL` product from MPVKit 1.0.0 into the applicatio
 
 The complete MPVKit licence text is included as `ThirdParty/MPVKit-LICENSE.txt` and inside the built application. CD Explorer itself is distributed under GPLv3 or later, which is compatible with the bundled GPL build.
 
+## LAME
+
+CD Explorer bundles the LAME 3.100 command-line encoder for MP3 output. The executable is built from the official source and distributed under the GNU Library General Public License version 2.
+
+- Project: https://lame.sourceforge.io/
+- Exact source archive: `lame-3.100.tar.gz`
+- SHA-256: `ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e`
+
+The complete licence text is included as `BundledTools/COPYING.LAME` and inside the built application.
+
+## Opus encoding components
+
+CD Explorer bundles `opusenc` from opus-tools 0.2, statically linked with Opus 1.5.2, libopusenc 0.2.1, opusfile 0.12 and libogg 1.3.5. These components use their respective Xiph.Org BSD-style licences; the combined licence material is included as `BundledTools/COPYING.Opus` and inside the built application. Exact source checksums are recorded in `Scripts/audio_encoder_sources.sha256`.
+
+## Cover Art Archive
+
+When a MusicBrainz release is selected, CD Explorer can retrieve its front-cover image from the Cover Art Archive. The service and images are not bundled with the application.
+

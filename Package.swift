@@ -9,9 +9,18 @@ let package = Package(
         .package(url: "https://github.com/mpvkit/MPVKit.git", exact: "1.0.0")
     ],
     targets: [
+        .target(
+            name: "DiscPrimer",
+            path: "DiscPrimer",
+            linkerSettings: [
+                .linkedFramework("IOKit"),
+                .linkedFramework("CoreFoundation")
+            ]
+        ),
         .executableTarget(
             name: "CDExplorer",
             dependencies: [
+                "DiscPrimer",
                 .product(name: "MPVKit-GPL", package: "MPVKit")
             ],
             path: "Sources",

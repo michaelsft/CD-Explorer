@@ -40,10 +40,16 @@ fetch_and_verify() {
 
 fetch_and_verify "$ffmpeg_url" "$ffmpeg_name" "$ffmpeg_sha"
 fetch_and_verify "$x264_url" "$x264_name" "$x264_sha"
+# MP3 and Opus encoder sources, fetched and checked by build_audio_encoders.sh.
+(cd "$cache_dir" && /usr/bin/shasum -a 256 -c "$script_dir/audio_encoder_sources.sha256")
 
 source_root="$stage_dir/CD-Explorer-$version-Third-Party-Source"
 /bin/cp "$cache_dir/$ffmpeg_name" "$source_root/"
 /bin/cp "$cache_dir/$x264_name" "$source_root/"
+for name in $(/usr/bin/awk '{print $2}' "$script_dir/audio_encoder_sources.sha256"); do
+  /bin/cp "$cache_dir/$name" "$source_root/"
+done
+/bin/cp "$script_dir/build_audio_encoders.sh" "$source_root/"
 /bin/cp "$project_dir/BundledTools/FFmpeg-NOTICE.txt" "$source_root/"
 /bin/cp "$project_dir/BundledTools/COPYING.GPLv2" "$source_root/"
 /bin/cp "$project_dir/BundledTools/COPYING.x264" "$source_root/"
