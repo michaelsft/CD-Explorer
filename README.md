@@ -73,14 +73,14 @@ The universal application is written to `build/CD Explorer.app`.
 To create the complete public-release set:
 
 ```bash
-zsh Scripts/build_release.sh 3.3
+zsh Scripts/build_release.sh 4.0
 ```
 
 The release builder creates:
 
-- `CD-Explorer-3.3.dmg`
-- `CD-Explorer-3.3-Third-Party-Source.tar.gz`
-- `SHA256SUMS-3.3.txt`
+- `CD-Explorer-4.0.dmg`
+- `CD-Explorer-4.0-Third-Party-Source.tar.gz`
+- `SHA256SUMS-4.0.txt`
 
 Upload all three files to the same GitHub Release. The repository tag supplies CD Explorer's own source and the pinned MPVKit package manifest; the separate source archive supplies the exact FFmpeg, x264, LAME and Opus-related sources corresponding to the bundled executables.
 

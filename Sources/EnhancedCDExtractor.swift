@@ -3332,7 +3332,7 @@ enum CoverArtArchive {
                 completion(nil); return
             }
             var request = URLRequest(url: url, timeoutInterval: 20)
-            request.setValue("CDExplorer/3.2 (https://github.com/michaelsft/CD-Explorer)", forHTTPHeaderField: "User-Agent")
+            request.setValue("CDExplorer/4.0 (https://github.com/michaelsft/CD-Explorer)", forHTTPHeaderField: "User-Agent")
             URLSession.shared.dataTask(with: request) { data, response, _ in
                 if (response as? HTTPURLResponse)?.statusCode == 200, let data, NSImage(data: data) != nil {
                     completion(data)
@@ -3386,7 +3386,7 @@ enum MusicBrainzLookup {
             completion(.success([])); return
         }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
-        request.setValue("CDExplorer/3.2 (https://github.com/michaelsft/CD-Explorer)", forHTTPHeaderField: "User-Agent")
+        request.setValue("CDExplorer/4.0 (https://github.com/michaelsft/CD-Explorer)", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 20
         perform(request, audioCount: audio.count, attempt: 1, completion: completion)

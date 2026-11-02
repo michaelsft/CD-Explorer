@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.0 - 2026-11-04
+
+- Replaced the application icon with a new brushed-metal disc and waveform design.
+- Locked and dimmed the video-conversion options while a conversion is running, restoring them when it finishes or is stopped.
+- Kept the progress bar and status text in their active colours while the video-conversion options have focus.
+- Replaced the placeholder text in the About window with the project copyright notice.
+- Restored the LICENSE file to the official GPLv3 text, removing stray download output.
+
 ## 3.3 - 2026-10-27
 
 - Added automatic disc-readiness handling that primes troublesome mixed-mode CDs and scans them as soon as macOS publishes them.
