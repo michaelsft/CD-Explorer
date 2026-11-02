@@ -98,7 +98,7 @@ CD Explorer repeatedly reads and compares audio data, retries inconsistent secto
 
 ## Licence
 
-CD Explorer is copyright © 2026 CD Explorer contributors and is distributed under the GNU General Public License version 3 or, at your option, any later version. See [LICENSE](LICENSE).
+CD Explorer is copyright © 2026 CD Explorer Contributors and is distributed under the GNU General Public License version 3 or, at your option, any later version. See [LICENSE](LICENSE).
 
 Bundled FFmpeg, x264 and MPVKit/libmpv components are distributed under GPL-compatible terms. See [ThirdParty/THIRD_PARTY_NOTICES.md](ThirdParty/THIRD_PARTY_NOTICES.md) and [ThirdParty/DEPENDENCIES.md](ThirdParty/DEPENDENCIES.md).
 
