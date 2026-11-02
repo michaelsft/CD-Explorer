@@ -6,6 +6,7 @@ build_dir="$project_dir/build"
 app_dir="$build_dir/CD Explorer.app"
 contents="$app_dir/Contents"
 iconset="$project_dir/Assets.xcassets/AppIcon.appiconset"
+icon_source="$project_dir/CD Explorer Icon.png"
 
 if [[ -d "$app_dir" ]]; then
   /bin/rm -rf "$app_dir"
@@ -20,11 +21,11 @@ for tool in ffmpeg ffprobe; do
   fi
 done
 
-if [[ ! -f "$iconset/icon_512x512@2x.png" || "$project_dir/AppIcon.png" -nt "$iconset/icon_512x512@2x.png" ]]; then
+if [[ ! -f "$iconset/icon_512x512@2x.png" || "$icon_source" -nt "$iconset/icon_512x512@2x.png" ]]; then
   for spec in '16 16x16' '32 16x16@2x' '32 32x32' '64 32x32@2x' '128 128x128' '256 128x128@2x' '256 256x256' '512 256x256@2x' '512 512x512' '1024 512x512@2x'; do
     pixels=${spec%% *}
     name=${spec#* }
-    /opt/homebrew/bin/magick -background none "$project_dir/AppIcon.png" -resize "${pixels}x${pixels}" -depth 8 \
+    /opt/homebrew/bin/magick -background none "$icon_source" -resize "${pixels}x${pixels}" -depth 8 \
       -type TrueColorAlpha -define png:color-type=6 "$iconset/icon_${name}.png"
   done
 fi

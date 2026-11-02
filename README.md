@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="AppIcon.png" width="180" alt="CD Explorer icon">
+  <img src="CD%20Explorer%20Icon.png" width="180" alt="CD Explorer icon">
 </p>
 
 <h1 align="center">CD Explorer</h1>
