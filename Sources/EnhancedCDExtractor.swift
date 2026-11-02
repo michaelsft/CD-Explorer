@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import AVFoundation
+import Combine
 import Foundation
 import Darwin
 import DiscPrimer
@@ -836,7 +837,32 @@ private final class VideoOptionsHandler: NSObject {
         if sender.state == .on { stretchButton?.state = .off }
         widescreenButton?.isEnabled = true
     }
-    func clearActions() { acceptAction = nil; cancelAction = nil; adjustAction = nil; adjustColourAction = nil }
+    // While a conversion started from the panel is running, every control is
+    // disabled and the content dimmed; controls that were already disabled stay so.
+    weak var content: NSView?
+    var busyObserver: AnyCancellable?
+    private var lockedControls: [NSControl] = []
+    func setLocked(_ locked: Bool) {
+        guard let content else { return }
+        if locked {
+            guard lockedControls.isEmpty else { return }
+            func collect(_ view: NSView) {
+                if let control = view as? NSControl, control.isEnabled { lockedControls.append(control) }
+                view.subviews.forEach(collect)
+            }
+            collect(content)
+            lockedControls.forEach { $0.isEnabled = false }
+            content.alphaValue = 0.45
+        } else {
+            lockedControls.forEach { $0.isEnabled = true }
+            lockedControls = []
+            content.alphaValue = 1
+        }
+    }
+    func clearActions() {
+        acceptAction = nil; cancelAction = nil; adjustAction = nil; adjustColourAction = nil
+        busyObserver = nil
+    }
 }
 
 private final class CropOverlayView: NSView {
@@ -1879,6 +1905,7 @@ enum VideoCompatibility {
 
     static func askUser(fileName: String, source: URL, probe: VideoProbe,
                         window preferredWindow: NSWindow?, canSaveOriginal: Bool = true,
+                        busy: AnyPublisher<Bool, Never>? = nil,
                         onRequest: ((VideoExtractionRequest) -> Void)? = nil) -> VideoExtractionRequest? {
         let dvdSize: VideoOutputSize = probe.usesPALFrameRate ? .dvdPAL : .dvdNTSC
         var request: VideoExtractionRequest?
@@ -2116,6 +2143,10 @@ enum VideoCompatibility {
             } else { panel.center() }
             panel.makeKeyAndOrderFront(nil)
             videoOptionHandlers.append(handler)
+            handler.content = root
+            handler.busyObserver = busy?.receive(on: DispatchQueue.main).sink { [weak handler] in
+                handler?.setLocked($0)
+            }
             let closePanel = {
                 if let parent { parent.removeChildWindow(panel) }
                 panel.orderOut(nil)
@@ -3999,7 +4030,8 @@ final class AppModel: ObservableObject {
                     self.status = "Ready to convert \(url.lastPathComponent)."
                     _ = VideoCompatibility.askUser(fileName: url.lastPathComponent,
                         source: url, probe: probe, window: presentationWindow,
-                        canSaveOriginal: false) { [weak self] request in
+                        canSaveOriginal: false,
+                        busy: self.$busy.eraseToAnyPublisher()) { [weak self] request in
                             guard let self, let destination = request.destination else { return }
                             guard !self.busy else {
                                 self.status = "Wait for the current operation to finish before converting again."
@@ -4389,6 +4421,21 @@ final class AppModel: ObservableObject {
     }
 }
 
+/// A linear progress bar that keeps its accent colour when the main window is
+/// inactive, such as while the Video Extraction Options panel has focus.
+private struct ActiveLinearProgressStyle: ProgressViewStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.secondary.opacity(0.2))
+                Capsule().fill(Color.accentColor)
+                    .frame(width: geometry.size.width * min(max(configuration.fractionCompleted ?? 0, 0), 1))
+            }
+        }
+        .frame(height: 6)
+    }
+}
+
 struct EnhancedCDView: View {
     @StateObject private var model = AppModel()
     private let discReadinessTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -4574,9 +4621,11 @@ struct EnhancedCDView: View {
             .frame(minHeight: 235)
 
             if model.busy {
-                ProgressView(value: model.progress).progressViewStyle(.linear)
+                ProgressView(value: model.progress).progressViewStyle(ActiveLinearProgressStyle())
             }
-            Text(model.status).font(.callout).foregroundStyle(model.status.localizedCaseInsensitiveContains("error") ? .red : .secondary)
+            Text(model.status).font(.callout).foregroundStyle(
+                model.status.localizedCaseInsensitiveContains("error") ? .red
+                    : model.busy ? .primary : .secondary)
 
             HStack {
                 Button("Extract") { model.extractAsIs() }
